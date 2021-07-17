@@ -41,10 +41,10 @@ import (
 	"sigs.k8s.io/external-dns/endpoint"
 )
 
-// gatewaySource is an implementation of Source for Istio Gateway objects.
+// istioGatewaySource is an implementation of Source for Istio Gateway objects.
 // The gateway implementation uses the spec.servers.hosts values for the hostnames.
 // Use targetAnnotationKey to explicitly set Endpoint.
-type gatewaySource struct {
+type istioGatewaySource struct {
 	kubeClient               kubernetes.Interface
 	istioClient              istioclient.Interface
 	namespace                string
@@ -56,7 +56,7 @@ type gatewaySource struct {
 	gatewayInformer          networkingv1alpha3informer.GatewayInformer
 }
 
-// NewIstioGatewaySource creates a new gatewaySource with the given config.
+// NewIstioGatewaySource creates a new istioGatewaySource with the given config.
 func NewIstioGatewaySource(
 	kubeClient kubernetes.Interface,
 	istioClient istioclient.Interface,
@@ -124,7 +124,7 @@ func NewIstioGatewaySource(
 		return nil, fmt.Errorf("failed to sync cache: %v", err)
 	}
 
-	return &gatewaySource{
+	return &istioGatewaySource{
 		kubeClient:               kubeClient,
 		istioClient:              istioClient,
 		namespace:                namespace,
@@ -139,7 +139,7 @@ func NewIstioGatewaySource(
 
 // Endpoints returns endpoint objects for each host-target combination that should be processed.
 // Retrieves all gateway resources in the source's namespace(s).
-func (sc *gatewaySource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error) {
+func (sc *istioGatewaySource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error) {
 	gwList, err := sc.istioClient.NetworkingV1alpha3().Gateways(sc.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ func (sc *gatewaySource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, e
 }
 
 // AddEventHandler adds an event handler that should be triggered if the watched Istio Gateway changes.
-func (sc *gatewaySource) AddEventHandler(ctx context.Context, handler func()) {
+func (sc *istioGatewaySource) AddEventHandler(ctx context.Context, handler func()) {
 	log.Debug("Adding event handler for Istio Gateway")
 
 	sc.gatewayInformer.Informer().AddEventHandler(
@@ -223,7 +223,7 @@ func (sc *gatewaySource) AddEventHandler(ctx context.Context, handler func()) {
 }
 
 // filterByAnnotations filters a list of configs by a given annotation selector.
-func (sc *gatewaySource) filterByAnnotations(gateways []networkingv1alpha3.Gateway) ([]networkingv1alpha3.Gateway, error) {
+func (sc *istioGatewaySource) filterByAnnotations(gateways []networkingv1alpha3.Gateway) ([]networkingv1alpha3.Gateway, error) {
 	labelSelector, err := metav1.ParseToLabelSelector(sc.annotationFilter)
 	if err != nil {
 		return nil, err
@@ -253,13 +253,13 @@ func (sc *gatewaySource) filterByAnnotations(gateways []networkingv1alpha3.Gatew
 	return filteredList, nil
 }
 
-func (sc *gatewaySource) setResourceLabel(gateway networkingv1alpha3.Gateway, endpoints []*endpoint.Endpoint) {
+func (sc *istioGatewaySource) setResourceLabel(gateway networkingv1alpha3.Gateway, endpoints []*endpoint.Endpoint) {
 	for _, ep := range endpoints {
 		ep.Labels[endpoint.ResourceLabelKey] = fmt.Sprintf("gateway/%s/%s", gateway.Namespace, gateway.Name)
 	}
 }
 
-func (sc *gatewaySource) targetsFromGateway(gateway networkingv1alpha3.Gateway) (targets endpoint.Targets, err error) {
+func (sc *istioGatewaySource) targetsFromGateway(gateway networkingv1alpha3.Gateway) (targets endpoint.Targets, err error) {
 	targets = getTargetsFromTargetAnnotation(gateway.Annotations)
 	if len(targets) > 0 {
 		return
@@ -289,7 +289,7 @@ func (sc *gatewaySource) targetsFromGateway(gateway networkingv1alpha3.Gateway) 
 }
 
 // endpointsFromGatewayConfig extracts the endpoints from an Istio Gateway Config object
-func (sc *gatewaySource) endpointsFromGateway(hostnames []string, gateway networkingv1alpha3.Gateway) ([]*endpoint.Endpoint, error) {
+func (sc *istioGatewaySource) endpointsFromGateway(hostnames []string, gateway networkingv1alpha3.Gateway) ([]*endpoint.Endpoint, error) {
 	var endpoints []*endpoint.Endpoint
 
 	annotations := gateway.Annotations
@@ -316,7 +316,7 @@ func (sc *gatewaySource) endpointsFromGateway(hostnames []string, gateway networ
 	return endpoints, nil
 }
 
-func (sc *gatewaySource) hostNamesFromGateway(gateway networkingv1alpha3.Gateway) ([]string, error) {
+func (sc *istioGatewaySource) hostNamesFromGateway(gateway networkingv1alpha3.Gateway) ([]string, error) {
 	var hostnames []string
 	for _, server := range gateway.Spec.Servers {
 		for _, host := range server.Hosts {
@@ -345,7 +345,7 @@ func (sc *gatewaySource) hostNamesFromGateway(gateway networkingv1alpha3.Gateway
 	return hostnames, nil
 }
 
-func (sc *gatewaySource) hostNamesFromTemplate(gateway networkingv1alpha3.Gateway) ([]string, error) {
+func (sc *istioGatewaySource) hostNamesFromTemplate(gateway networkingv1alpha3.Gateway) ([]string, error) {
 	// Process the whole template string
 	var buf bytes.Buffer
 	err := sc.fqdnTemplate.Execute(&buf, gateway)

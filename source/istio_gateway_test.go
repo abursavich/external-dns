@@ -35,8 +35,8 @@ import (
 	"sigs.k8s.io/external-dns/endpoint"
 )
 
-// This is a compile-time validation that gatewaySource is a Source.
-var _ Source = &gatewaySource{}
+// This is a compile-time validation that istioGatewaySource is a Source.
+var _ Source = &istioGatewaySource{}
 
 type GatewaySuite struct {
 	suite.Suite
@@ -91,7 +91,7 @@ func (suite *GatewaySuite) TestResourceLabelIsSet() {
 
 func TestGateway(t *testing.T) {
 	suite.Run(t, new(GatewaySuite))
-	t.Run("endpointsFromGatewayConfig", testEndpointsFromGatewayConfig)
+	t.Run("endpointsFromIstioGatewaySource", testEndpointsFromIstioGatewaySource)
 	t.Run("Endpoints", testGatewayEndpoints)
 }
 
@@ -153,11 +153,11 @@ func TestNewIstioGatewaySource(t *testing.T) {
 	}
 }
 
-func testEndpointsFromGatewayConfig(t *testing.T) {
+func testEndpointsFromIstioGatewaySource(t *testing.T) {
 	for _, ti := range []struct {
 		title      string
 		lbServices []fakeIngressGatewayService
-		config     fakeGatewayConfig
+		config     fakeIstioGatewayConfig
 		expected   []*endpoint.Endpoint
 	}{
 		{
@@ -167,7 +167,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					hostnames: []string{"lb.com"}, // Kubernetes omits the trailing dot
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{"foo.bar"}, // Kubernetes requires removal of trailing dot
 				},
@@ -186,7 +186,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					hostnames: []string{"lb.com"}, // Kubernetes omits the trailing dot
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{"my-namespace/foo.bar"}, // Kubernetes requires removal of trailing dot
 				},
@@ -205,7 +205,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{"foo.bar"},
 				},
@@ -225,7 +225,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{"foo.bar"},
 				},
@@ -249,7 +249,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{},
 			},
 			expected: []*endpoint.Endpoint{},
@@ -262,7 +262,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{""},
 				},
@@ -272,7 +272,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 		{
 			title:      "no targets",
 			lbServices: []fakeIngressGatewayService{{}},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{""},
 				},
@@ -293,7 +293,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 					name:      "gateway2",
 				},
 			},
-			config: fakeGatewayConfig{
+			config: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{"foo.bar"}, // Kubernetes requires removal of trailing dot
 				},
@@ -308,7 +308,7 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 	} {
 		t.Run(ti.title, func(t *testing.T) {
 			gatewayCfg := ti.config.Config()
-			if source, err := newTestGatewaySource(ti.lbServices); err != nil {
+			if source, err := newTestIstioGatewaySource(ti.lbServices); err != nil {
 				require.NoError(t, err)
 			} else if hostnames, err := source.hostNamesFromGateway(gatewayCfg); err != nil {
 				require.NoError(t, err)
@@ -327,7 +327,7 @@ func testGatewayEndpoints(t *testing.T) {
 		targetNamespace          string
 		annotationFilter         string
 		lbServices               []fakeIngressGatewayService
-		configItems              []fakeGatewayConfig
+		configItems              []fakeIstioGatewayConfig
 		expected                 []*endpoint.Endpoint
 		expectError              bool
 		fqdnTemplate             string
@@ -347,7 +347,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{"lb.com"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -387,7 +387,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{"lb.com"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -428,7 +428,7 @@ func testGatewayEndpoints(t *testing.T) {
 					namespace: "testing1",
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "testing1",
@@ -455,7 +455,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -481,7 +481,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -502,7 +502,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -524,7 +524,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -550,7 +550,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -570,7 +570,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -595,7 +595,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -616,7 +616,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{"elb.com"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -646,7 +646,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -667,7 +667,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:        "fake1",
 					namespace:   "",
@@ -697,7 +697,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:        "fake1",
 					namespace:   "",
@@ -751,7 +751,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -803,7 +803,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"1.2.3.4"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -834,7 +834,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"1.2.3.4"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -870,7 +870,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -902,7 +902,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -958,7 +958,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -1012,7 +1012,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -1034,7 +1034,7 @@ func testGatewayEndpoints(t *testing.T) {
 					hostnames: []string{"lb.com"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -1080,7 +1080,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"1.2.3.4"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -1102,7 +1102,7 @@ func testGatewayEndpoints(t *testing.T) {
 					ips: []string{"1.2.3.4"},
 				},
 			},
-			configItems: []fakeGatewayConfig{
+			configItems: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "",
@@ -1149,7 +1149,7 @@ func testGatewayEndpoints(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			gatewaySource, err := NewIstioGatewaySource(
+			istioGatewaySource, err := NewIstioGatewaySource(
 				fakeKubernetesClient,
 				fakeIstioClient,
 				ti.targetNamespace,
@@ -1160,7 +1160,7 @@ func testGatewayEndpoints(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			res, err := gatewaySource.Endpoints(context.Background())
+			res, err := istioGatewaySource.Endpoints(context.Background())
 			if ti.expectError {
 				assert.Error(t, err)
 			} else {
@@ -1173,7 +1173,7 @@ func testGatewayEndpoints(t *testing.T) {
 }
 
 // gateway specific helper functions
-func newTestGatewaySource(loadBalancerList []fakeIngressGatewayService) (*gatewaySource, error) {
+func newTestIstioGatewaySource(loadBalancerList []fakeIngressGatewayService) (*istioGatewaySource, error) {
 	fakeKubernetesClient := fake.NewSimpleClientset()
 	fakeIstioClient := NewFakeConfigStore()
 
@@ -1198,7 +1198,7 @@ func newTestGatewaySource(loadBalancerList []fakeIngressGatewayService) (*gatewa
 		return nil, err
 	}
 
-	gwsrc, ok := src.(*gatewaySource)
+	gwsrc, ok := src.(*istioGatewaySource)
 	if !ok {
 		return nil, errors.New("underlying source type was not gateway")
 	}
@@ -1244,7 +1244,7 @@ func (ig fakeIngressGatewayService) Service() *v1.Service {
 	return svc
 }
 
-type fakeGatewayConfig struct {
+type fakeIstioGatewayConfig struct {
 	namespace   string
 	name        string
 	annotations map[string]string
@@ -1252,7 +1252,7 @@ type fakeGatewayConfig struct {
 	selector    map[string]string
 }
 
-func (c fakeGatewayConfig) Config() networkingv1alpha3.Gateway {
+func (c fakeIstioGatewayConfig) Config() networkingv1alpha3.Gateway {
 	gw := networkingv1alpha3.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        c.name,

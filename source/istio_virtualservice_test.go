@@ -81,7 +81,7 @@ func (suite *VirtualServiceSuite) SetupTest() {
 	)
 	suite.NoError(err, "should initialize virtualservice source")
 
-	suite.gwconfig = (fakeGatewayConfig{
+	suite.gwconfig = (fakeIstioGatewayConfig{
 		name:      "foo-gateway-with-targets",
 		namespace: "istio-system",
 		dnsnames:  [][]string{{"*"}},
@@ -177,14 +177,14 @@ func TestNewIstioVirtualServiceSource(t *testing.T) {
 func testVirtualServiceBindsToGateway(t *testing.T) {
 	for _, ti := range []struct {
 		title    string
-		gwconfig fakeGatewayConfig
+		gwconfig fakeIstioGatewayConfig
 		vsconfig fakeVirtualServiceConfig
 		vsHost   string
 		expected bool
 	}{
 		{
 			title: "matching host *",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -193,7 +193,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching host *.<domain>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*.foo.bar"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -202,7 +202,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host *.<domain>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*.foo.bar"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -211,7 +211,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host *.<domain>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*.foo.bar"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -220,7 +220,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host *.<domain>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*.foo.bar"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -229,7 +229,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching host */*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{{"*/*"}},
 			},
 			vsconfig: fakeVirtualServiceConfig{},
@@ -238,7 +238,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching host <namespace>/*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"myns/*"}},
 			},
@@ -250,7 +250,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching host ./*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"./*"}},
 			},
@@ -262,7 +262,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host ./*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"./*"}},
 			},
@@ -274,7 +274,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host <namespace>/*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"myns/*"}},
 			},
@@ -286,7 +286,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching host <namespace>/*",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"myns/*"}},
 			},
@@ -298,7 +298,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching exportTo *",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"*"}},
 			},
@@ -311,7 +311,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "matching exportTo <namespace>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"*"}},
 			},
@@ -324,7 +324,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching exportTo <namespace>",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"*"}},
 			},
@@ -337,7 +337,7 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 		},
 		{
 			title: "not matching exportTo .",
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				namespace: "istio-system",
 				dnsnames:  [][]string{{"*"}},
 			},
@@ -361,7 +361,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 	for _, ti := range []struct {
 		title      string
 		lbServices []fakeIngressGatewayService
-		gwconfig   fakeGatewayConfig
+		gwconfig   fakeIstioGatewayConfig
 		vsconfig   fakeVirtualServiceConfig
 		expected   []*endpoint.Endpoint
 	}{
@@ -372,7 +372,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					hostnames: []string{"lb.com"}, // Kubernetes omits the trailing dot
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -394,7 +394,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					ips: []string{"8.8.8.8"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -417,7 +417,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -444,7 +444,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -462,7 +462,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -480,7 +480,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					hostnames: []string{"elb.com", "alb.com"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				dnsnames: [][]string{
 					{""},
 				},
@@ -490,7 +490,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 		{
 			title:      "no targets",
 			lbServices: []fakeIngressGatewayService{{}},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 			},
@@ -518,7 +518,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 					ips: []string{"8.8.8.8", "127.0.0.1"},
 				},
 			},
-			gwconfig: fakeGatewayConfig{
+			gwconfig: fakeIstioGatewayConfig{
 				name:     "mygw",
 				dnsnames: [][]string{{"*"}},
 				selector: map[string]string{
@@ -538,7 +538,7 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
-			if source, err := newTestVirtualServiceSource(ti.lbServices, []fakeGatewayConfig{ti.gwconfig}); err != nil {
+			if source, err := newTestVirtualServiceSource(ti.lbServices, []fakeIstioGatewayConfig{ti.gwconfig}); err != nil {
 				require.NoError(t, err)
 			} else if endpoints, err := source.endpointsFromVirtualService(context.Background(), ti.vsconfig.Config()); err != nil {
 				require.NoError(t, err)
@@ -556,7 +556,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 		targetNamespace          string
 		annotationFilter         string
 		lbServices               []fakeIngressGatewayService
-		gwConfigs                []fakeGatewayConfig
+		gwConfigs                []fakeIstioGatewayConfig
 		vsConfigs                []fakeVirtualServiceConfig
 		expected                 []*endpoint.Endpoint
 		expectError              bool
@@ -573,7 +573,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					hostnames: []string{"lb.com"},
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -626,7 +626,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					ips:       []string{"8.8.8.8"},
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "gw1",
 					namespace: namespace,
@@ -662,7 +662,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: "istio-system",
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "istio-system",
@@ -712,7 +712,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: "testing1",
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "testing1",
@@ -753,7 +753,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -787,7 +787,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -821,7 +821,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -854,7 +854,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -883,7 +883,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -918,7 +918,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -949,7 +949,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 		},
 		{
 			title: "multiple FQDN template hostnames with restricted gw.hosts",
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1042,7 +1042,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1087,7 +1087,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1126,7 +1126,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1160,7 +1160,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1202,7 +1202,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 		},
 		{
 			title: "template for virtualservice; gateway with target annotation",
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1276,7 +1276,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: namespace,
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: namespace,
@@ -1351,7 +1351,7 @@ func testVirtualServiceEndpoints(t *testing.T) {
 					namespace: "testing2",
 				},
 			},
-			gwConfigs: []fakeGatewayConfig{
+			gwConfigs: []fakeIstioGatewayConfig{
 				{
 					name:      "fake1",
 					namespace: "istio-system",
@@ -1518,7 +1518,7 @@ func testGatewaySelectorMatchesService(t *testing.T) {
 	}
 }
 
-func newTestVirtualServiceSource(loadBalancerList []fakeIngressGatewayService, gwList []fakeGatewayConfig) (*virtualServiceSource, error) {
+func newTestVirtualServiceSource(loadBalancerList []fakeIngressGatewayService, gwList []fakeIstioGatewayConfig) (*virtualServiceSource, error) {
 	fakeKubernetesClient := fake.NewSimpleClientset()
 	fakeIstioClient := NewFakeConfigStore()
 
