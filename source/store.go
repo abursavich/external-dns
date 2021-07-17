@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	gateway "sigs.k8s.io/gateway-api/pkg/client/clientset/gateway/versioned"
 )
 
 // ErrSourceNotFound is returned when a requested source doesn't exist.
@@ -72,6 +73,7 @@ type Config struct {
 type ClientGenerator interface {
 	RESTConfig() (*rest.Config, error)
 	KubeClient() (kubernetes.Interface, error)
+	GatewayClient() (gateway.Interface, error)
 	IstioClient() (istio.Interface, error)
 	CloudFoundryClient(cfAPPEndpoint string, cfUsername string, cfPassword string) (*cfclient.Client, error)
 	DynamicKubernetesClient() (dynamic.Interface, error)
@@ -87,6 +89,7 @@ type SingletonClientGenerator struct {
 
 	restConfig      onceWithError
 	kubeClient      onceWithError
+	gatewayClient   onceWithError
 	istioClient     onceWithError
 	cfClient        onceWithError
 	dynKubeClient   onceWithError
@@ -154,6 +157,20 @@ func (p *SingletonClientGenerator) KubeClient() (kubernetes.Interface, error) {
 		return kubernetes.NewForConfig(cfg)
 	})
 	val, _ := iface.(kubernetes.Interface)
+	return val, err
+}
+
+// GatewayClient generates a gateway client if it was not created before
+func (p *SingletonClientGenerator) GatewayClient() (gateway.Interface, error) {
+	iface, err := p.gatewayClient.Do(func() (interface{}, error) {
+		log.Infof("Instantiating new Gateway client")
+		cfg, err := p.RESTConfig()
+		if err != nil {
+			return nil, err
+		}
+		return gateway.NewForConfig(cfg)
+	})
+	val, _ := iface.(gateway.Interface)
 	return val, err
 }
 
