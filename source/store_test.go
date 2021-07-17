@@ -24,19 +24,30 @@ import (
 	openshift "github.com/openshift/client-go/route/clientset/versioned"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	istioclient "istio.io/client-go/pkg/clientset/versioned"
+	istio "istio.io/client-go/pkg/clientset/versioned"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeKube "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 type MockClientGenerator struct {
 	mock.Mock
+	restConfig              *rest.Config
 	kubeClient              kubernetes.Interface
-	istioClient             istioclient.Interface
+	istioClient             istio.Interface
 	cloudFoundryClient      *cfclient.Client
 	dynamicKubernetesClient dynamic.Interface
 	openshiftClient         openshift.Interface
+}
+
+func (m *MockClientGenerator) RESTConfig() (*rest.Config, error) {
+	args := m.Called()
+	if args.Error(1) == nil {
+		m.restConfig = args.Get(0).(*rest.Config)
+		return m.restConfig, nil
+	}
+	return nil, args.Error(1)
 }
 
 func (m *MockClientGenerator) KubeClient() (kubernetes.Interface, error) {
@@ -48,10 +59,10 @@ func (m *MockClientGenerator) KubeClient() (kubernetes.Interface, error) {
 	return nil, args.Error(1)
 }
 
-func (m *MockClientGenerator) IstioClient() (istioclient.Interface, error) {
+func (m *MockClientGenerator) IstioClient() (istio.Interface, error) {
 	args := m.Called()
 	if args.Error(1) == nil {
-		m.istioClient = args.Get(0).(istioclient.Interface)
+		m.istioClient = args.Get(0).(istio.Interface)
 		return m.istioClient, nil
 	}
 	return nil, args.Error(1)
