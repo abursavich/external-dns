@@ -20,69 +20,80 @@ import (
 	"errors"
 	"testing"
 
-	cfclient "github.com/cloudfoundry-community/go-cfclient"
+	cloudfoundry "github.com/cloudfoundry-community/go-cfclient"
 	openshift "github.com/openshift/client-go/route/clientset/versioned"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	istioclient "istio.io/client-go/pkg/clientset/versioned"
+	istio "istio.io/client-go/pkg/clientset/versioned"
 	istiofake "istio.io/client-go/pkg/clientset/versioned/fake"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeKube "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 type MockClientGenerator struct {
 	mock.Mock
+	restConfig              *rest.Config
 	kubeClient              kubernetes.Interface
-	istioClient             istioclient.Interface
-	cloudFoundryClient      *cfclient.Client
+	istioClient             istio.Interface
+	cloudFoundryClient      *cloudfoundry.Client
 	dynamicKubernetesClient dynamic.Interface
 	openshiftClient         openshift.Interface
 }
 
+func (m *MockClientGenerator) RESTConfig() (*rest.Config, error) {
+	args := m.Called()
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	m.restConfig = args.Get(0).(*rest.Config)
+	return m.restConfig, nil
+}
+
 func (m *MockClientGenerator) KubeClient() (kubernetes.Interface, error) {
 	args := m.Called()
-	if args.Error(1) == nil {
-		m.kubeClient = args.Get(0).(kubernetes.Interface)
-		return m.kubeClient, nil
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	m.kubeClient = args.Get(0).(kubernetes.Interface)
+	return m.kubeClient, nil
 }
 
-func (m *MockClientGenerator) IstioClient() (istioclient.Interface, error) {
+func (m *MockClientGenerator) IstioClient() (istio.Interface, error) {
 	args := m.Called()
-	if args.Error(1) == nil {
-		m.istioClient = args.Get(0).(istioclient.Interface)
-		return m.istioClient, nil
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	m.istioClient = args.Get(0).(istio.Interface)
+	return m.istioClient, nil
 }
 
-func (m *MockClientGenerator) CloudFoundryClient(cfAPIEndpoint string, cfUsername string, cfPassword string) (*cfclient.Client, error) {
+func (m *MockClientGenerator) CloudFoundryClient(cfAPIEndpoint string, cfUsername string, cfPassword string) (*cloudfoundry.Client, error) {
 	args := m.Called()
-	if args.Error(1) == nil {
-		m.cloudFoundryClient = args.Get(0).(*cfclient.Client)
-		return m.cloudFoundryClient, nil
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	m.cloudFoundryClient = args.Get(0).(*cloudfoundry.Client)
+	return m.cloudFoundryClient, nil
 }
 
 func (m *MockClientGenerator) DynamicKubernetesClient() (dynamic.Interface, error) {
 	args := m.Called()
-	if args.Error(1) == nil {
-		m.dynamicKubernetesClient = args.Get(0).(dynamic.Interface)
-		return m.dynamicKubernetesClient, nil
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	m.dynamicKubernetesClient = args.Get(0).(dynamic.Interface)
+	return m.dynamicKubernetesClient, nil
 }
 
 func (m *MockClientGenerator) OpenShiftClient() (openshift.Interface, error) {
 	args := m.Called()
-	if args.Error(1) == nil {
-		m.openshiftClient = args.Get(0).(openshift.Interface)
-		return m.openshiftClient, nil
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
 	}
-	return nil, args.Error(1)
+	m.openshiftClient = args.Get(0).(openshift.Interface)
+	return m.openshiftClient, nil
 }
 
 type ByNamesTestSuite struct {
