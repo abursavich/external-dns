@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strings"
 	"text/template"
-	"time"
 
 	"github.com/pkg/errors"
 	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
@@ -85,11 +84,8 @@ func NewContourHTTPProxySource(
 	informerFactory.Start(wait.NeverStop)
 
 	// wait for the local cache to be populated.
-	err = poll(time.Second, 60*time.Second, func() (bool, error) {
-		return httpProxyInformer.Informer().HasSynced(), nil
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to sync cache")
+	if err := waitForDynamicCacheSync(context.Background(), informerFactory); err != nil {
+		return nil, err
 	}
 
 	uc, err := NewUnstructuredConverter()
