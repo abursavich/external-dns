@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	gloo "sigs.k8s.io/external-dns/third_party/solo.io/clientset/versioned"
 )
 
 // ErrSourceNotFound is returned when a requested source doesn't exist.
@@ -76,6 +77,7 @@ type ClientGenerator interface {
 	CloudFoundryClient(endpoint string, username string, password string) (*cloudfoundry.Client, error)
 	DynamicKubernetesClient() (dynamic.Interface, error)
 	OpenShiftClient() (openshift.Interface, error)
+	GlooClient() (gloo.Interface, error)
 }
 
 // SingletonClientGenerator stores provider clients and guarantees that only one instance of client
@@ -91,6 +93,7 @@ type SingletonClientGenerator struct {
 	cloudFoundryClient onceWithError
 	dynKubeClient      onceWithError
 	openshiftClient    onceWithError
+	glooClient         onceWithError
 }
 
 type onceWithError struct {
@@ -218,6 +221,19 @@ func (p *SingletonClientGenerator) OpenShiftClient() (openshift.Interface, error
 	return val, err
 }
 
+func (p *SingletonClientGenerator) GlooClient() (gloo.Interface, error) {
+	iface, err := p.glooClient.Do(func() (interface{}, error) {
+		log.Infof("Instantiating new Gloo client")
+		cfg, err := p.RESTConfig()
+		if err != nil {
+			return nil, err
+		}
+		return gloo.NewForConfig(cfg)
+	})
+	val, _ := iface.(gloo.Interface)
+	return val, err
+}
+
 // ByNames returns multiple Sources given multiple names.
 func ByNames(p ClientGenerator, names []string, cfg *Config) ([]Source, error) {
 	sources := []Source{}
@@ -312,15 +328,7 @@ func BuildWithConfig(source string, p ClientGenerator, cfg *Config) (Source, err
 		}
 		return NewContourHTTPProxySource(dynamicClient, cfg.Namespace, cfg.AnnotationFilter, cfg.FQDNTemplate, cfg.CombineFQDNAndAnnotation, cfg.IgnoreHostnameAnnotation)
 	case "gloo-proxy":
-		kubernetesClient, err := p.KubeClient()
-		if err != nil {
-			return nil, err
-		}
-		dynamicClient, err := p.DynamicKubernetesClient()
-		if err != nil {
-			return nil, err
-		}
-		return NewGlooSource(dynamicClient, kubernetesClient, cfg.GlooNamespace)
+		return NewGlooSource(p, cfg)
 	case "openshift-route":
 		ocpClient, err := p.OpenShiftClient()
 		if err != nil {

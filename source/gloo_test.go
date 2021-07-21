@@ -18,17 +18,16 @@ package source
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	fakeDynamic "k8s.io/client-go/dynamic/fake"
-	fakeKube "k8s.io/client-go/kubernetes/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+
 	"sigs.k8s.io/external-dns/endpoint"
+	gloov1 "sigs.k8s.io/external-dns/third_party/solo.io/apis/gloo/v1"
+	gloofake "sigs.k8s.io/external-dns/third_party/solo.io/clientset/versioned/fake"
 )
 
 // This is a compile-time validation that glooSource is a Source.
@@ -37,24 +36,20 @@ var _ Source = &glooSource{}
 const defaultGlooNamespace = "gloo-system"
 
 // Internal proxy test
-var internalProxy = proxy{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: proxyGVR.GroupVersion().String(),
-		Kind:       "Proxy",
-	},
-	Metadata: metav1.ObjectMeta{
+var internalProxy = gloov1.Proxy{
+	ObjectMeta: metav1.ObjectMeta{
 		Name:      "internal",
 		Namespace: defaultGlooNamespace,
 	},
-	Spec: proxySpec{
-		Listeners: []proxySpecListener{
+	Spec: gloov1.ProxySpec{
+		Listeners: []gloov1.Listener{
 			{
-				HTTPListener: proxySpecHTTPListener{
-					VirtualHosts: []proxyVirtualHost{
+				HTTPListener: gloov1.HTTPListener{
+					VirtualHosts: []gloov1.VirtualHost{
 						{
 							Domains: []string{"a.test", "b.test"},
-							Metadata: proxyVirtualHostMetadata{
-								Source: []proxyVirtualHostMetadataSource{
+							Metadata: gloov1.VirtualHostMetadata{
+								Source: []gloov1.VirtualHostMetadataSource{
 									{
 										Kind:      "*v1.Unknown",
 										Name:      "my-unknown-svc",
@@ -65,8 +60,8 @@ var internalProxy = proxy{
 						},
 						{
 							Domains: []string{"c.test"},
-							Metadata: proxyVirtualHostMetadata{
-								Source: []proxyVirtualHostMetadataSource{
+							Metadata: gloov1.VirtualHostMetadata{
+								Source: []gloov1.VirtualHostMetadataSource{
 									{
 										Kind:      "*v1.VirtualService",
 										Name:      "my-internal-svc",
@@ -84,8 +79,8 @@ var internalProxy = proxy{
 
 var internalProxySvc = corev1.Service{
 	ObjectMeta: metav1.ObjectMeta{
-		Name:      internalProxy.Metadata.Name,
-		Namespace: internalProxy.Metadata.Namespace,
+		Name:      internalProxy.Name,
+		Namespace: internalProxy.Namespace,
 	},
 	Spec: corev1.ServiceSpec{
 		Type: corev1.ServiceTypeLoadBalancer,
@@ -93,25 +88,15 @@ var internalProxySvc = corev1.Service{
 	Status: corev1.ServiceStatus{
 		LoadBalancer: corev1.LoadBalancerStatus{
 			Ingress: []corev1.LoadBalancerIngress{
-				corev1.LoadBalancerIngress{
-					IP: "203.0.113.1",
-				},
-				corev1.LoadBalancerIngress{
-					IP: "203.0.113.2",
-				},
-				corev1.LoadBalancerIngress{
-					IP: "203.0.113.3",
-				},
+				{IP: "203.0.113.1"},
+				{IP: "203.0.113.2"},
+				{IP: "203.0.113.3"},
 			},
 		},
 	},
 }
 
-var internalProxySource = metav1.PartialObjectMetadata{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: virtualServiceGVR.GroupVersion().String(),
-		Kind:       "VirtualService",
-	},
+var internalProxySource = gloov1.VirtualService{
 	ObjectMeta: metav1.ObjectMeta{
 		Name:      internalProxy.Spec.Listeners[0].HTTPListener.VirtualHosts[1].Metadata.Source[0].Name,
 		Namespace: internalProxy.Spec.Listeners[0].HTTPListener.VirtualHosts[1].Metadata.Source[0].Namespace,
@@ -124,24 +109,20 @@ var internalProxySource = metav1.PartialObjectMetadata{
 }
 
 // External proxy test
-var externalProxy = proxy{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: proxyGVR.GroupVersion().String(),
-		Kind:       "Proxy",
-	},
-	Metadata: metav1.ObjectMeta{
+var externalProxy = gloov1.Proxy{
+	ObjectMeta: metav1.ObjectMeta{
 		Name:      "external",
 		Namespace: defaultGlooNamespace,
 	},
-	Spec: proxySpec{
-		Listeners: []proxySpecListener{
+	Spec: gloov1.ProxySpec{
+		Listeners: []gloov1.Listener{
 			{
-				HTTPListener: proxySpecHTTPListener{
-					VirtualHosts: []proxyVirtualHost{
+				HTTPListener: gloov1.HTTPListener{
+					VirtualHosts: []gloov1.VirtualHost{
 						{
 							Domains: []string{"d.test"},
-							Metadata: proxyVirtualHostMetadata{
-								Source: []proxyVirtualHostMetadataSource{
+							Metadata: gloov1.VirtualHostMetadata{
+								Source: []gloov1.VirtualHostMetadataSource{
 									{
 										Kind:      "*v1.Unknown",
 										Name:      "my-unknown-svc",
@@ -152,8 +133,8 @@ var externalProxy = proxy{
 						},
 						{
 							Domains: []string{"e.test"},
-							Metadata: proxyVirtualHostMetadata{
-								Source: []proxyVirtualHostMetadataSource{
+							Metadata: gloov1.VirtualHostMetadata{
+								Source: []gloov1.VirtualHostMetadataSource{
 									{
 										Kind:      "*v1.VirtualService",
 										Name:      "my-external-svc",
@@ -171,8 +152,8 @@ var externalProxy = proxy{
 
 var externalProxySvc = corev1.Service{
 	ObjectMeta: metav1.ObjectMeta{
-		Name:      externalProxy.Metadata.Name,
-		Namespace: externalProxy.Metadata.Namespace,
+		Name:      externalProxy.Name,
+		Namespace: externalProxy.Namespace,
 	},
 	Spec: corev1.ServiceSpec{
 		Type: corev1.ServiceTypeLoadBalancer,
@@ -180,25 +161,15 @@ var externalProxySvc = corev1.Service{
 	Status: corev1.ServiceStatus{
 		LoadBalancer: corev1.LoadBalancerStatus{
 			Ingress: []corev1.LoadBalancerIngress{
-				corev1.LoadBalancerIngress{
-					Hostname: "a.example.org",
-				},
-				corev1.LoadBalancerIngress{
-					Hostname: "b.example.org",
-				},
-				corev1.LoadBalancerIngress{
-					Hostname: "c.example.org",
-				},
+				{Hostname: "a.example.org"},
+				{Hostname: "b.example.org"},
+				{Hostname: "c.example.org"},
 			},
 		},
 	},
 }
 
-var externalProxySource = metav1.PartialObjectMetadata{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: virtualServiceGVR.GroupVersion().String(),
-		Kind:       "VirtualService",
-	},
+var externalProxySource = gloov1.VirtualService{
 	ObjectMeta: metav1.ObjectMeta{
 		Name:      externalProxy.Spec.Listeners[0].HTTPListener.VirtualHosts[1].Metadata.Source[0].Name,
 		Namespace: externalProxy.Spec.Listeners[0].HTTPListener.VirtualHosts[1].Metadata.Source[0].Namespace,
@@ -213,60 +184,43 @@ var externalProxySource = metav1.PartialObjectMetadata{
 func TestGlooSource(t *testing.T) {
 	t.Parallel()
 
-	fakeKubernetesClient := fakeKube.NewSimpleClientset()
-	fakeDynamicClient := fakeDynamic.NewSimpleDynamicClient(runtime.NewScheme())
-
-	source, err := NewGlooSource(fakeDynamicClient, fakeKubernetesClient, defaultGlooNamespace)
-	assert.NoError(t, err)
-	assert.NotNil(t, source)
-
-	internalProxyUnstructured := unstructured.Unstructured{}
-	externalProxyUnstructured := unstructured.Unstructured{}
-
-	internalProxySourceUnstructured := unstructured.Unstructured{}
-	externalProxySourceUnstructured := unstructured.Unstructured{}
-
-	internalProxyAsJSON, err := json.Marshal(internalProxy)
-	assert.NoError(t, err)
-
-	externalProxyAsJSON, err := json.Marshal(externalProxy)
-	assert.NoError(t, err)
-
-	internalProxySvcAsJSON, err := json.Marshal(internalProxySource)
-	assert.NoError(t, err)
-
-	externalProxySvcAsJSON, err := json.Marshal(externalProxySource)
-	assert.NoError(t, err)
-
-	assert.NoError(t, internalProxyUnstructured.UnmarshalJSON(internalProxyAsJSON))
-	assert.NoError(t, externalProxyUnstructured.UnmarshalJSON(externalProxyAsJSON))
-
-	assert.NoError(t, internalProxySourceUnstructured.UnmarshalJSON(internalProxySvcAsJSON))
-	assert.NoError(t, externalProxySourceUnstructured.UnmarshalJSON(externalProxySvcAsJSON))
+	ctx := context.Background()
+	kubeClient := kubefake.NewSimpleClientset()
+	glooClient := gloofake.NewSimpleClientset()
 
 	// Create proxy resources
-	_, err = fakeDynamicClient.Resource(proxyGVR).Namespace(defaultGlooNamespace).Create(context.Background(), &internalProxyUnstructured, metav1.CreateOptions{})
+	_, err := glooClient.GatewayV1().Proxies(internalProxy.Namespace).Create(ctx, &internalProxy, metav1.CreateOptions{})
 	assert.NoError(t, err)
-	_, err = fakeDynamicClient.Resource(proxyGVR).Namespace(defaultGlooNamespace).Create(context.Background(), &externalProxyUnstructured, metav1.CreateOptions{})
+	_, err = glooClient.GatewayV1().Proxies(externalProxy.Namespace).Create(ctx, &externalProxy, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	// Create proxy source
-	_, err = fakeDynamicClient.Resource(virtualServiceGVR).Namespace(internalProxySource.Namespace).Create(context.Background(), &internalProxySourceUnstructured, metav1.CreateOptions{})
+	_, err = glooClient.GatewayV1().VirtualServices(internalProxySource.Namespace).Create(ctx, &internalProxySource, metav1.CreateOptions{})
 	assert.NoError(t, err)
-	_, err = fakeDynamicClient.Resource(virtualServiceGVR).Namespace(externalProxySource.Namespace).Create(context.Background(), &externalProxySourceUnstructured, metav1.CreateOptions{})
+	_, err = glooClient.GatewayV1().VirtualServices(externalProxySource.Namespace).Create(ctx, &externalProxySource, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	// Create proxy service resources
-	_, err = fakeKubernetesClient.CoreV1().Services(internalProxySvc.GetNamespace()).Create(context.Background(), &internalProxySvc, metav1.CreateOptions{})
+	_, err = kubeClient.CoreV1().Services(internalProxySvc.Namespace).Create(ctx, &internalProxySvc, metav1.CreateOptions{})
 	assert.NoError(t, err)
-	_, err = fakeKubernetesClient.CoreV1().Services(externalProxySvc.GetNamespace()).Create(context.Background(), &externalProxySvc, metav1.CreateOptions{})
+	_, err = kubeClient.CoreV1().Services(externalProxySvc.Namespace).Create(ctx, &externalProxySvc, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
-	endpoints, err := source.Endpoints(context.Background())
+	clients := new(MockClientGenerator)
+	clients.On("KubeClient").Return(kubeClient, nil)
+	clients.On("GlooClient").Return(glooClient, nil)
+
+	source, err := NewGlooSource(clients, &Config{
+		GlooNamespace: defaultGlooNamespace,
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, source)
+
+	endpoints, err := source.Endpoints(ctx)
 	assert.NoError(t, err)
 	assert.Len(t, endpoints, 5)
-	assert.Equal(t, endpoints, []*endpoint.Endpoint{
-		&endpoint.Endpoint{
+	validateEndpoints(t, endpoints, []*endpoint.Endpoint{
+		{
 			DNSName:          "a.test",
 			Targets:          []string{internalProxySvc.Status.LoadBalancer.Ingress[0].IP, internalProxySvc.Status.LoadBalancer.Ingress[1].IP, internalProxySvc.Status.LoadBalancer.Ingress[2].IP},
 			RecordType:       endpoint.RecordTypeA,
@@ -274,7 +228,7 @@ func TestGlooSource(t *testing.T) {
 			Labels:           endpoint.Labels{},
 			ProviderSpecific: endpoint.ProviderSpecific{},
 		},
-		&endpoint.Endpoint{
+		{
 			DNSName:          "b.test",
 			Targets:          []string{internalProxySvc.Status.LoadBalancer.Ingress[0].IP, internalProxySvc.Status.LoadBalancer.Ingress[1].IP, internalProxySvc.Status.LoadBalancer.Ingress[2].IP},
 			RecordType:       endpoint.RecordTypeA,
@@ -282,7 +236,7 @@ func TestGlooSource(t *testing.T) {
 			Labels:           endpoint.Labels{},
 			ProviderSpecific: endpoint.ProviderSpecific{},
 		},
-		&endpoint.Endpoint{
+		{
 			DNSName:       "c.test",
 			Targets:       []string{internalProxySvc.Status.LoadBalancer.Ingress[0].IP, internalProxySvc.Status.LoadBalancer.Ingress[1].IP, internalProxySvc.Status.LoadBalancer.Ingress[2].IP},
 			RecordType:    endpoint.RecordTypeA,
@@ -296,7 +250,7 @@ func TestGlooSource(t *testing.T) {
 				},
 			},
 		},
-		&endpoint.Endpoint{
+		{
 			DNSName:          "d.test",
 			Targets:          []string{externalProxySvc.Status.LoadBalancer.Ingress[0].Hostname, externalProxySvc.Status.LoadBalancer.Ingress[1].Hostname, externalProxySvc.Status.LoadBalancer.Ingress[2].Hostname},
 			RecordType:       endpoint.RecordTypeCNAME,
@@ -304,7 +258,7 @@ func TestGlooSource(t *testing.T) {
 			Labels:           endpoint.Labels{},
 			ProviderSpecific: endpoint.ProviderSpecific{},
 		},
-		&endpoint.Endpoint{
+		{
 			DNSName:       "e.test",
 			Targets:       []string{externalProxySvc.Status.LoadBalancer.Ingress[0].Hostname, externalProxySvc.Status.LoadBalancer.Ingress[1].Hostname, externalProxySvc.Status.LoadBalancer.Ingress[2].Hostname},
 			RecordType:    endpoint.RecordTypeCNAME,
