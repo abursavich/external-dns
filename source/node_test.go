@@ -30,12 +30,16 @@ import (
 )
 
 func TestNodeSource(t *testing.T) {
+	t.Parallel()
+
 	t.Run("NewNodeSource", testNodeSourceNewNodeSource)
 	t.Run("Endpoints", testNodeSourceEndpoints)
 }
 
 // testNodeSourceNewNodeSource tests that NewNodeService doesn't return an error.
 func testNodeSourceNewNodeSource(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title            string
 		annotationFilter string
@@ -63,6 +67,8 @@ func testNodeSourceNewNodeSource(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := NewNodeSource(
 				fake.NewSimpleClientset(),
 				ti.annotationFilter,
@@ -80,6 +86,8 @@ func testNodeSourceNewNodeSource(t *testing.T) {
 
 // testNodeSourceEndpoints tests that various node generate the correct endpoints.
 func testNodeSourceEndpoints(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		title            string
 		annotationFilter string
@@ -322,6 +330,8 @@ func testNodeSourceEndpoints(t *testing.T) {
 		},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
+			t.Parallel()
+
 			// Create a Kubernetes testing client
 			kubernetes := fake.NewSimpleClientset()
 

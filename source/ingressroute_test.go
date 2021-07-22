@@ -112,12 +112,16 @@ func convertIngressRouteToUnstructured(ir *contour.IngressRoute, s *runtime.Sche
 }
 
 func TestIngressRoute(t *testing.T) {
+	t.Parallel()
+
 	suite.Run(t, new(IngressRouteSuite))
 	t.Run("endpointsFromIngressRoute", testEndpointsFromIngressRoute)
 	t.Run("Endpoints", testIngressRouteEndpoints)
 }
 
 func TestNewContourIngressRouteSource(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title                    string
 		annotationFilter         string
@@ -157,6 +161,8 @@ func TestNewContourIngressRouteSource(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			fakeDynamicClient, _ := newDynamicKubernetesClient()
 
 			_, err := NewContourIngressRouteSource(
@@ -274,6 +280,8 @@ func testEndpointsFromIngressRoute(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			if source, err := newTestIngressRouteSource(ti.loadBalancer); err != nil {
 				require.NoError(t, err)
 			} else if endpoints, err := source.endpointsFromIngressRoute(context.Background(), ti.ingressRoute.IngressRoute()); err != nil {
@@ -286,6 +294,8 @@ func testEndpointsFromIngressRoute(t *testing.T) {
 }
 
 func testIngressRouteEndpoints(t *testing.T) {
+	t.Parallel()
+
 	namespace := "testing"
 	for _, ti := range []struct {
 		title                    string
@@ -999,6 +1009,8 @@ func testIngressRouteEndpoints(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			ingressRoutes := make([]*contour.IngressRoute, 0)
 			for _, item := range ti.ingressRouteItems {
 				ingressRoutes = append(ingressRoutes, item.IngressRoute())

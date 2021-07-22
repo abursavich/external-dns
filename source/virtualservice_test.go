@@ -109,6 +109,8 @@ func (suite *VirtualServiceSuite) TestResourceLabelIsSet() {
 }
 
 func TestVirtualService(t *testing.T) {
+	t.Parallel()
+
 	suite.Run(t, new(VirtualServiceSuite))
 	t.Run("virtualServiceBindsToGateway", testVirtualServiceBindsToGateway)
 	t.Run("endpointsFromVirtualServiceConfig", testEndpointsFromVirtualServiceConfig)
@@ -117,6 +119,8 @@ func TestVirtualService(t *testing.T) {
 }
 
 func TestNewIstioVirtualServiceSource(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title                    string
 		annotationFilter         string
@@ -156,6 +160,8 @@ func TestNewIstioVirtualServiceSource(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := NewIstioVirtualServiceSource(
 				fake.NewSimpleClientset(),
 				NewFakeConfigStore(),
@@ -358,6 +364,8 @@ func testVirtualServiceBindsToGateway(t *testing.T) {
 }
 
 func testEndpointsFromVirtualServiceConfig(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title      string
 		lbServices []fakeIngressGatewayService
@@ -538,6 +546,8 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			if source, err := newTestVirtualServiceSource(ti.lbServices, []fakeGatewayConfig{ti.gwconfig}); err != nil {
 				require.NoError(t, err)
 			} else if endpoints, err := source.endpointsFromVirtualService(context.Background(), ti.vsconfig.Config()); err != nil {
@@ -550,6 +560,8 @@ func testEndpointsFromVirtualServiceConfig(t *testing.T) {
 }
 
 func testVirtualServiceEndpoints(t *testing.T) {
+	t.Parallel()
+
 	namespace := "testing"
 	for _, ti := range []struct {
 		title                    string
@@ -1433,6 +1445,8 @@ func testVirtualServiceEndpoints(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			var gateways []networkingv1alpha3.Gateway
 			var virtualservices []networkingv1alpha3.VirtualService
 

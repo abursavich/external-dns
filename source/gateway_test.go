@@ -90,12 +90,16 @@ func (suite *GatewaySuite) TestResourceLabelIsSet() {
 }
 
 func TestGateway(t *testing.T) {
+	t.Parallel()
+
 	suite.Run(t, new(GatewaySuite))
 	t.Run("endpointsFromGatewayConfig", testEndpointsFromGatewayConfig)
 	t.Run("Endpoints", testGatewayEndpoints)
 }
 
 func TestNewIstioGatewaySource(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title                    string
 		annotationFilter         string
@@ -135,6 +139,8 @@ func TestNewIstioGatewaySource(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := NewIstioGatewaySource(
 				fake.NewSimpleClientset(),
 				NewFakeConfigStore(),
@@ -154,6 +160,8 @@ func TestNewIstioGatewaySource(t *testing.T) {
 }
 
 func testEndpointsFromGatewayConfig(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title      string
 		lbServices []fakeIngressGatewayService
@@ -307,6 +315,8 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			gatewayCfg := ti.config.Config()
 			if source, err := newTestGatewaySource(ti.lbServices); err != nil {
 				require.NoError(t, err)
@@ -322,6 +332,8 @@ func testEndpointsFromGatewayConfig(t *testing.T) {
 }
 
 func testGatewayEndpoints(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title                    string
 		targetNamespace          string
@@ -1133,6 +1145,7 @@ func testGatewayEndpoints(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
 
 			fakeKubernetesClient := fake.NewSimpleClientset()
 

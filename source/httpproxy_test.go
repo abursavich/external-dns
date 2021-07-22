@@ -18,7 +18,6 @@ package source
 
 import (
 	"context"
-	v1 "k8s.io/api/core/v1"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -26,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -87,12 +87,16 @@ func convertHTTPProxyToUnstructured(hp *projectcontour.HTTPProxy, s *runtime.Sch
 }
 
 func TestHTTPProxy(t *testing.T) {
+	t.Parallel()
+
 	suite.Run(t, new(HTTPProxySuite))
 	t.Run("endpointsFromHTTPProxy", testEndpointsFromHTTPProxy)
 	t.Run("Endpoints", testHTTPProxyEndpoints)
 }
 
 func TestNewContourHTTPProxySource(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title                    string
 		annotationFilter         string
@@ -132,6 +136,8 @@ func TestNewContourHTTPProxySource(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			fakeDynamicClient, _ := newDynamicKubernetesClient()
 
 			_, err := NewContourHTTPProxySource(
@@ -152,6 +158,8 @@ func TestNewContourHTTPProxySource(t *testing.T) {
 }
 
 func testEndpointsFromHTTPProxy(t *testing.T) {
+	t.Parallel()
+
 	for _, ti := range []struct {
 		title     string
 		httpProxy fakeHTTPProxy
@@ -234,6 +242,8 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			if source, err := newTestHTTPProxySource(); err != nil {
 				require.NoError(t, err)
 			} else if endpoints, err := source.endpointsFromHTTPProxy(ti.httpProxy.HTTPProxy()); err != nil {
@@ -246,6 +256,8 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 }
 
 func testHTTPProxyEndpoints(t *testing.T) {
+	t.Parallel()
+
 	namespace := "testing"
 	for _, ti := range []struct {
 		title                    string
@@ -959,6 +971,8 @@ func testHTTPProxyEndpoints(t *testing.T) {
 		},
 	} {
 		t.Run(ti.title, func(t *testing.T) {
+			t.Parallel()
+
 			httpProxies := make([]*projectcontour.HTTPProxy, 0)
 			for _, item := range ti.httpProxyItems {
 				item.loadBalancer = ti.loadBalancer

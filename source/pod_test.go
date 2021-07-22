@@ -29,6 +29,8 @@ import (
 
 // testPodSource tests that various services generate the correct endpoints.
 func TestPodSource(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		title           string
 		targetNamespace string
@@ -388,6 +390,8 @@ func TestPodSource(t *testing.T) {
 		},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
+			t.Parallel()
+
 			// Create a Kubernetes testing client
 			kubernetes := fake.NewSimpleClientset()
 			ctx := context.Background()
