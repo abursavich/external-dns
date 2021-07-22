@@ -19,7 +19,6 @@ require (
 	github.com/bodgit/tsig v0.0.2
 	github.com/cloudflare/cloudflare-go v0.10.1
 	github.com/cloudfoundry-community/go-cfclient v0.0.0-20190201205600-f136f9222381
-	github.com/datawire/ambassador v1.6.0
 	github.com/denverdino/aliyungo v0.0.0-20190125010748-a747050bb1ba
 	github.com/digitalocean/godo v1.36.0
 	github.com/dnsimple/dnsimple-go v0.60.0
@@ -60,11 +59,9 @@ require (
 	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sync v0.0.0-20200625203802-6e8e738ad208
-	golang.org/x/tools v0.0.0-20200708003708-134513de8882 // indirect
 	google.golang.org/api v0.15.0
 	gopkg.in/ns1/ns1-go.v2 v2.0.0-20190322154155-0dafb5275fd1
 	gopkg.in/yaml.v2 v2.3.0
-	honnef.co/go/tools v0.0.1-2020.1.4 // indirect
 	istio.io/api v0.0.0-20210128181506-0c4b8e54850f
 	istio.io/client-go v0.0.0-20210128182905-ee2edd059e02
 	k8s.io/api v0.18.8

@@ -32,6 +32,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+
+	ambassador "sigs.k8s.io/external-dns/third_party/getambassador.io/clientset/versioned"
 	contour "sigs.k8s.io/external-dns/third_party/projectcontour.io/clientset/versioned"
 	contourfake "sigs.k8s.io/external-dns/third_party/projectcontour.io/clientset/versioned/fake"
 	gloo "sigs.k8s.io/external-dns/third_party/solo.io/clientset/versioned"
@@ -47,6 +49,7 @@ type MockClientGenerator struct {
 	openshiftClient         openshift.Interface
 	glooClient              gloo.Interface
 	contourClient           contour.Interface
+	ambassadorClient        ambassador.Interface
 }
 
 func (m *MockClientGenerator) RESTConfig() (*rest.Config, error) {
@@ -111,11 +114,21 @@ func (m *MockClientGenerator) GlooClient() (gloo.Interface, error) {
 	}
 	return nil, args.Error(1)
 }
+
 func (m *MockClientGenerator) ContourClient() (contour.Interface, error) {
 	args := m.Called()
 	if args.Error(1) == nil {
 		m.contourClient = args.Get(0).(contour.Interface)
 		return m.contourClient, nil
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockClientGenerator) AmbassadorClient() (ambassador.Interface, error) {
+	args := m.Called()
+	if args.Error(1) == nil {
+		m.ambassadorClient = args.Get(0).(ambassador.Interface)
+		return m.ambassadorClient, nil
 	}
 	return nil, args.Error(1)
 }

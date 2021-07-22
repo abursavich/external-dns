@@ -27,6 +27,15 @@ cp "$REPO_ROOT/go.mod" "$REPO_ROOT/go.sum" "$TMP_DIR/$PACKAGE_NAME"
 
 pushd "$TMP_DIR/$PACKAGE_NAME"
 
+echo "Generating code for Ambassador..."
+/tmp/code-generator/generate-groups.sh \
+  all \
+  "$PACKAGE_NAME/third_party/getambassador.io" \
+  "$PACKAGE_NAME/third_party/getambassador.io/apis" \
+  "ambassador:v2" \
+  --go-header-file "${REPO_ROOT}/third_party/getambassador.io/boilerplate.go.txt" \
+  --output-base "$TMP_DIR"
+
 echo "Generating code for Gloo..."
 /tmp/code-generator/generate-groups.sh \
   all \

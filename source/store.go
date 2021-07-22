@@ -33,6 +33,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	ambassador "sigs.k8s.io/external-dns/third_party/getambassador.io/clientset/versioned"
 	contour "sigs.k8s.io/external-dns/third_party/projectcontour.io/clientset/versioned"
 	gloo "sigs.k8s.io/external-dns/third_party/solo.io/clientset/versioned"
 )
@@ -80,6 +82,7 @@ type ClientGenerator interface {
 	OpenShiftClient() (openshift.Interface, error)
 	GlooClient() (gloo.Interface, error)
 	ContourClient() (contour.Interface, error)
+	AmbassadorClient() (ambassador.Interface, error)
 }
 
 // SingletonClientGenerator stores provider clients and guarantees that only one instance of client
@@ -97,6 +100,7 @@ type SingletonClientGenerator struct {
 	openshiftClient    onceWithError
 	glooClient         onceWithError
 	contourClient      onceWithError
+	ambassadorClient   onceWithError
 }
 
 type onceWithError struct {
@@ -250,6 +254,19 @@ func (p *SingletonClientGenerator) GlooClient() (gloo.Interface, error) {
 	return val, err
 }
 
+func (p *SingletonClientGenerator) AmbassadorClient() (ambassador.Interface, error) {
+	iface, err := p.ambassadorClient.Do(func() (interface{}, error) {
+		log.Infof("Instantiating new Ambassador client")
+		cfg, err := p.RESTConfig()
+		if err != nil {
+			return nil, err
+		}
+		return ambassador.NewForConfig(cfg)
+	})
+	val, _ := iface.(ambassador.Interface)
+	return val, err
+}
+
 // ByNames returns multiple Sources given multiple names.
 func ByNames(p ClientGenerator, names []string, cfg *Config) ([]Source, error) {
 	sources := []Source{}
@@ -318,15 +335,7 @@ func BuildWithConfig(source string, p ClientGenerator, cfg *Config) (Source, err
 		}
 		return NewCloudFoundrySource(cloudFoundryClient)
 	case "ambassador-host":
-		kubernetesClient, err := p.KubeClient()
-		if err != nil {
-			return nil, err
-		}
-		dynamicClient, err := p.DynamicKubernetesClient()
-		if err != nil {
-			return nil, err
-		}
-		return NewAmbassadorHostSource(dynamicClient, kubernetesClient, cfg.Namespace)
+		return NewAmbassadorHostSource(p, cfg)
 	case "contour-ingressroute":
 		return NewContourIngressRouteSource(p, cfg)
 	case "contour-httpproxy":

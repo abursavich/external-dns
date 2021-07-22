@@ -242,6 +242,12 @@ func (sc *kongTCPIngressSource) AddEventHandler(ctx context.Context, handler fun
 	sc.kongTCPIngressInformer.Informer().AddEventHandler(eventHandlerFunc(handler))
 }
 
+// unstructuredConverter handles conversions between unstructured.Unstructured and Ambassador types
+type unstructuredConverter struct {
+	// scheme holds an initializer for converting Unstructured to a type
+	scheme *runtime.Scheme
+}
+
 // newUnstructuredConverter returns a new unstructuredConverter initialized
 func newKongUnstructuredConverter() (*unstructuredConverter, error) {
 	uc := &unstructuredConverter{
