@@ -24,12 +24,12 @@ import (
 	"time"
 
 	cloudfoundry "github.com/cloudfoundry-community/go-cfclient"
+	kong "github.com/kong/kubernetes-ingress-controller/pkg/client/configuration/clientset/versioned"
 	"github.com/linki/instrumented_http"
 	openshift "github.com/openshift/client-go/route/clientset/versioned"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	istio "istio.io/client-go/pkg/clientset/versioned"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -78,11 +78,11 @@ type ClientGenerator interface {
 	KubeClient() (kubernetes.Interface, error)
 	IstioClient() (istio.Interface, error)
 	CloudFoundryClient(endpoint string, username string, password string) (*cloudfoundry.Client, error)
-	DynamicKubernetesClient() (dynamic.Interface, error)
 	OpenShiftClient() (openshift.Interface, error)
 	GlooClient() (gloo.Interface, error)
 	ContourClient() (contour.Interface, error)
 	AmbassadorClient() (ambassador.Interface, error)
+	KongClient() (kong.Interface, error)
 }
 
 // SingletonClientGenerator stores provider clients and guarantees that only one instance of client
@@ -96,11 +96,11 @@ type SingletonClientGenerator struct {
 	kubeClient         onceWithError
 	istioClient        onceWithError
 	cloudFoundryClient onceWithError
-	dynKubeClient      onceWithError
 	openshiftClient    onceWithError
 	glooClient         onceWithError
 	contourClient      onceWithError
 	ambassadorClient   onceWithError
+	kongClient         onceWithError
 }
 
 type onceWithError struct {
@@ -200,20 +200,6 @@ func (p *SingletonClientGenerator) CloudFoundryClient(endpoint string, username 
 	return val, err
 }
 
-// DynamicKubernetesClient generates a dynamic client if it was not created before
-func (p *SingletonClientGenerator) DynamicKubernetesClient() (dynamic.Interface, error) {
-	iface, err := p.dynKubeClient.Do(func() (interface{}, error) {
-		log.Infof("Instantiating new Dynamic Kubernetes client")
-		cfg, err := p.RESTConfig()
-		if err != nil {
-			return nil, err
-		}
-		return dynamic.NewForConfig(cfg)
-	})
-	val, _ := iface.(dynamic.Interface)
-	return val, err
-}
-
 // OpenShiftClient generates an openshift client if it was not created before
 func (p *SingletonClientGenerator) OpenShiftClient() (openshift.Interface, error) {
 	iface, err := p.openshiftClient.Do(func() (interface{}, error) {
@@ -264,6 +250,19 @@ func (p *SingletonClientGenerator) AmbassadorClient() (ambassador.Interface, err
 		return ambassador.NewForConfig(cfg)
 	})
 	val, _ := iface.(ambassador.Interface)
+	return val, err
+}
+
+func (p *SingletonClientGenerator) KongClient() (kong.Interface, error) {
+	iface, err := p.kongClient.Do(func() (interface{}, error) {
+		log.Infof("Instantiating new Kong client")
+		cfg, err := p.RESTConfig()
+		if err != nil {
+			return nil, err
+		}
+		return kong.NewForConfig(cfg)
+	})
+	val, _ := iface.(kong.Interface)
 	return val, err
 }
 
@@ -373,15 +372,7 @@ func BuildWithConfig(source string, p ClientGenerator, cfg *Config) (Source, err
 		}
 		return NewRouteGroupSource(cfg.RequestTimeout, token, tokenPath, apiServerURL, cfg.Namespace, cfg.AnnotationFilter, cfg.FQDNTemplate, cfg.SkipperRouteGroupVersion, cfg.CombineFQDNAndAnnotation, cfg.IgnoreHostnameAnnotation)
 	case "kong-tcpingress":
-		kubernetesClient, err := p.KubeClient()
-		if err != nil {
-			return nil, err
-		}
-		dynamicClient, err := p.DynamicKubernetesClient()
-		if err != nil {
-			return nil, err
-		}
-		return NewKongTCPIngressSource(dynamicClient, kubernetesClient, cfg.Namespace, cfg.AnnotationFilter)
+		return NewKongTCPIngressSource(p, cfg)
 	}
 	return nil, ErrSourceNotFound
 }

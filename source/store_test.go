@@ -21,14 +21,13 @@ import (
 	"testing"
 
 	cloudfoundry "github.com/cloudfoundry-community/go-cfclient"
+	kong "github.com/kong/kubernetes-ingress-controller/pkg/client/configuration/clientset/versioned"
+	kongfake "github.com/kong/kubernetes-ingress-controller/pkg/client/configuration/clientset/versioned/fake"
 	openshift "github.com/openshift/client-go/route/clientset/versioned"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	istio "istio.io/client-go/pkg/clientset/versioned"
 	istiofake "istio.io/client-go/pkg/clientset/versioned/fake"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -41,15 +40,15 @@ import (
 
 type MockClientGenerator struct {
 	mock.Mock
-	restConfig              *rest.Config
-	kubeClient              kubernetes.Interface
-	istioClient             istio.Interface
-	cloudFoundryClient      *cloudfoundry.Client
-	dynamicKubernetesClient dynamic.Interface
-	openshiftClient         openshift.Interface
-	glooClient              gloo.Interface
-	contourClient           contour.Interface
-	ambassadorClient        ambassador.Interface
+	restConfig         *rest.Config
+	kubeClient         kubernetes.Interface
+	istioClient        istio.Interface
+	cloudFoundryClient *cloudfoundry.Client
+	openshiftClient    openshift.Interface
+	glooClient         gloo.Interface
+	contourClient      contour.Interface
+	ambassadorClient   ambassador.Interface
+	kongClient         kong.Interface
 }
 
 func (m *MockClientGenerator) RESTConfig() (*rest.Config, error) {
@@ -88,15 +87,6 @@ func (m *MockClientGenerator) CloudFoundryClient(cfAPIEndpoint string, cfUsernam
 	return m.cloudFoundryClient, nil
 }
 
-func (m *MockClientGenerator) DynamicKubernetesClient() (dynamic.Interface, error) {
-	args := m.Called()
-	if args.Error(1) != nil {
-		return nil, args.Error(1)
-	}
-	m.dynamicKubernetesClient = args.Get(0).(dynamic.Interface)
-	return m.dynamicKubernetesClient, nil
-}
-
 func (m *MockClientGenerator) OpenShiftClient() (openshift.Interface, error) {
 	args := m.Called()
 	if args.Error(1) != nil {
@@ -133,6 +123,15 @@ func (m *MockClientGenerator) AmbassadorClient() (ambassador.Interface, error) {
 	return nil, args.Error(1)
 }
 
+func (m *MockClientGenerator) KongClient() (kong.Interface, error) {
+	args := m.Called()
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+	m.kongClient = args.Get(0).(kong.Interface)
+	return m.kongClient, nil
+}
+
 type ByNamesTestSuite struct {
 	suite.Suite
 }
@@ -142,7 +141,7 @@ func (suite *ByNamesTestSuite) TestAllInitialized() {
 	mockClientGenerator.On("KubeClient").Return(kubefake.NewSimpleClientset(), nil)
 	mockClientGenerator.On("IstioClient").Return(istiofake.NewSimpleClientset(), nil)
 	mockClientGenerator.On("ContourClient").Return(contourfake.NewSimpleClientset(), nil)
-	mockClientGenerator.On("DynamicKubernetesClient").Return(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil)
+	mockClientGenerator.On("KongClient").Return(kongfake.NewSimpleClientset(), nil)
 
 	sources, err := ByNames(mockClientGenerator, []string{"service", "ingress", "istio-gateway", "contour-ingressroute", "contour-httpproxy", "kong-tcpingress", "fake"}, minimalConfig)
 	suite.NoError(err, "should not generate errors")

@@ -18,16 +18,14 @@ package source
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	kongfake "github.com/kong/kubernetes-ingress-controller/pkg/client/configuration/clientset/versioned/fake"
+	kong_v1b1 "github.com/kong/kubernetes-ingress-controller/railgun/apis/configuration/v1beta1"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	fakeDynamic "k8s.io/client-go/dynamic/fake"
-	fakeKube "k8s.io/client-go/kubernetes/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/external-dns/endpoint"
 )
 
@@ -41,16 +39,12 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 
 	for _, ti := range []struct {
 		title    string
-		tcpProxy TCPIngress
+		tcpProxy *kong_v1b1.TCPIngress
 		expected []*endpoint.Endpoint
 	}{
 		{
 			title: "TCPIngress with hostname annotation",
-			tcpProxy: TCPIngress{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: kongGroupdVersionResource.GroupVersion().String(),
-					Kind:       "TCPIngress",
-				},
+			tcpProxy: &kong_v1b1.TCPIngress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "tcp-ingress-annotation",
 					Namespace: defaultKongNamespace,
@@ -59,8 +53,8 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						"kubernetes.io/ingress.class":               "kong",
 					},
 				},
-				Spec: tcpIngressSpec{
-					Rules: []tcpIngressRule{
+				Spec: kong_v1b1.TCPIngressSpec{
+					Rules: []kong_v1b1.IngressRule{
 						{
 							Port: 30000,
 						},
@@ -69,7 +63,7 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						},
 					},
 				},
-				Status: tcpIngressStatus{
+				Status: kong_v1b1.TCPIngressStatus{
 					LoadBalancer: corev1.LoadBalancerStatus{
 						Ingress: []corev1.LoadBalancerIngress{
 							{
@@ -94,11 +88,7 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 		},
 		{
 			title: "TCPIngress using SNI",
-			tcpProxy: TCPIngress{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: kongGroupdVersionResource.GroupVersion().String(),
-					Kind:       "TCPIngress",
-				},
+			tcpProxy: &kong_v1b1.TCPIngress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "tcp-ingress-sni",
 					Namespace: defaultKongNamespace,
@@ -106,8 +96,8 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						"kubernetes.io/ingress.class": "kong",
 					},
 				},
-				Spec: tcpIngressSpec{
-					Rules: []tcpIngressRule{
+				Spec: kong_v1b1.TCPIngressSpec{
+					Rules: []kong_v1b1.IngressRule{
 						{
 							Port: 30002,
 							Host: "b.example.com",
@@ -118,7 +108,7 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						},
 					},
 				},
-				Status: tcpIngressStatus{
+				Status: kong_v1b1.TCPIngressStatus{
 					LoadBalancer: corev1.LoadBalancerStatus{
 						Ingress: []corev1.LoadBalancerIngress{
 							{
@@ -152,11 +142,7 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 		},
 		{
 			title: "TCPIngress with hostname annotation and using SNI",
-			tcpProxy: TCPIngress{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: kongGroupdVersionResource.GroupVersion().String(),
-					Kind:       "TCPIngress",
-				},
+			tcpProxy: &kong_v1b1.TCPIngress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "tcp-ingress-both",
 					Namespace: defaultKongNamespace,
@@ -165,8 +151,8 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						"kubernetes.io/ingress.class":               "kong",
 					},
 				},
-				Spec: tcpIngressSpec{
-					Rules: []tcpIngressRule{
+				Spec: kong_v1b1.TCPIngressSpec{
+					Rules: []kong_v1b1.IngressRule{
 						{
 							Port: 30004,
 							Host: "e.example.com",
@@ -177,7 +163,7 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 						},
 					},
 				},
-				Status: tcpIngressStatus{
+				Status: kong_v1b1.TCPIngressStatus{
 					LoadBalancer: corev1.LoadBalancerStatus{
 						Ingress: []corev1.LoadBalancerIngress{
 							{
@@ -224,35 +210,27 @@ func TestKongTCPIngressEndpoints(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			fakeKubernetesClient := fakeKube.NewSimpleClientset()
-			scheme := runtime.NewScheme()
-			scheme.AddKnownTypes(kongGroupdVersionResource.GroupVersion(), &TCPIngress{}, &TCPIngressList{})
-			fakeDynamicClient := fakeDynamic.NewSimpleDynamicClient(scheme)
+			ctx := context.Background()
+			kubeClient := kubefake.NewSimpleClientset()
+			kongClient := kongfake.NewSimpleClientset()
 
-			tcpi := unstructured.Unstructured{}
+			_, err := kongClient.ConfigurationV1beta1().TCPIngresses(ti.tcpProxy.Namespace).Create(ctx, ti.tcpProxy, metav1.CreateOptions{})
+			require.NoError(t, err)
 
-			tcpIngressAsJSON, err := json.Marshal(ti.tcpProxy)
-			assert.NoError(t, err)
+			clients := new(MockClientGenerator)
+			clients.On("KubeClient").Return(kubeClient, nil)
+			clients.On("KongClient").Return(kongClient, nil)
 
-			assert.NoError(t, tcpi.UnmarshalJSON(tcpIngressAsJSON))
+			source, err := NewKongTCPIngressSource(clients, &Config{
+				Namespace:        defaultKongNamespace,
+				AnnotationFilter: "kubernetes.io/ingress.class=kong",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, source)
 
-			// Create proxy resources
-			_, err = fakeDynamicClient.Resource(kongGroupdVersionResource).Namespace(defaultKongNamespace).Create(context.Background(), &tcpi, metav1.CreateOptions{})
-			assert.NoError(t, err)
-
-			source, err := NewKongTCPIngressSource(fakeDynamicClient, fakeKubernetesClient, defaultKongNamespace, "kubernetes.io/ingress.class=kong")
-			assert.NoError(t, err)
-			assert.NotNil(t, source)
-
-			count := &unstructured.UnstructuredList{}
-			for len(count.Items) < 1 {
-				count, _ = fakeDynamicClient.Resource(kongGroupdVersionResource).Namespace(defaultKongNamespace).List(context.Background(), metav1.ListOptions{})
-			}
-
-			endpoints, err := source.Endpoints(context.Background())
-			assert.NoError(t, err)
-			assert.Len(t, endpoints, len(ti.expected))
-			assert.Equal(t, endpoints, ti.expected)
+			endpoints, err := source.Endpoints(ctx)
+			require.NoError(t, err)
+			validateEndpoints(t, endpoints, ti.expected)
 		})
 	}
 }
