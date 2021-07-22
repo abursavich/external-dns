@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/pkg/errors"
+	contour "github.com/projectcontour/contour/apis/contour/v1beta1"
 	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +30,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+
 	"sigs.k8s.io/external-dns/endpoint"
 )
 
@@ -1007,6 +1010,13 @@ func testHTTPProxyEndpoints(t *testing.T) {
 			validateEndpoints(t, res, ti.expected)
 		})
 	}
+}
+
+func newDynamicKubernetesClient() (*dynamicfake.FakeDynamicClient, *runtime.Scheme) {
+	s := runtime.NewScheme()
+	_ = contour.AddToScheme(s)
+	_ = projectcontour.AddToScheme(s)
+	return dynamicfake.NewSimpleDynamicClient(s), s
 }
 
 // httpproxy specific helper functions

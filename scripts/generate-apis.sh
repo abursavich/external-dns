@@ -26,6 +26,8 @@ cp --recursive --link "$REPO_ROOT/third_party" "$TMP_DIR/$PACKAGE_NAME"
 cp "$REPO_ROOT/go.mod" "$REPO_ROOT/go.sum" "$TMP_DIR/$PACKAGE_NAME"
 
 pushd "$TMP_DIR/$PACKAGE_NAME"
+
+echo "Generating code for Gloo..."
 /tmp/code-generator/generate-groups.sh \
   all \
   "$PACKAGE_NAME/third_party/solo.io" \
@@ -33,6 +35,16 @@ pushd "$TMP_DIR/$PACKAGE_NAME"
   "gloo:v1" \
   --go-header-file "${REPO_ROOT}/third_party/solo.io/boilerplate.go.txt" \
   --output-base "$TMP_DIR"
+
+echo "Generating code for ProjectContour..."
+/tmp/code-generator/generate-groups.sh \
+  all \
+  "$PACKAGE_NAME/third_party/projectcontour.io" \
+  "$PACKAGE_NAME/third_party/projectcontour.io/apis" \
+  "contour:v1beta1 projectcontour:v1" \
+  --go-header-file "${REPO_ROOT}/third_party/projectcontour.io/boilerplate.go.txt" \
+  --output-base "$TMP_DIR"
+
 popd
 
 cp --recursive --link --force "$TMP_DIR/$PACKAGE_NAME/third_party" "$REPO_ROOT"

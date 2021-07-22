@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	contour "sigs.k8s.io/external-dns/third_party/projectcontour.io/clientset/versioned"
 	gloo "sigs.k8s.io/external-dns/third_party/solo.io/clientset/versioned"
 )
 
@@ -78,6 +79,7 @@ type ClientGenerator interface {
 	DynamicKubernetesClient() (dynamic.Interface, error)
 	OpenShiftClient() (openshift.Interface, error)
 	GlooClient() (gloo.Interface, error)
+	ContourClient() (contour.Interface, error)
 }
 
 // SingletonClientGenerator stores provider clients and guarantees that only one instance of client
@@ -94,6 +96,7 @@ type SingletonClientGenerator struct {
 	dynKubeClient      onceWithError
 	openshiftClient    onceWithError
 	glooClient         onceWithError
+	contourClient      onceWithError
 }
 
 type onceWithError struct {
@@ -221,6 +224,19 @@ func (p *SingletonClientGenerator) OpenShiftClient() (openshift.Interface, error
 	return val, err
 }
 
+func (p *SingletonClientGenerator) ContourClient() (contour.Interface, error) {
+	iface, err := p.contourClient.Do(func() (interface{}, error) {
+		log.Infof("Instantiating new Contour client")
+		cfg, err := p.RESTConfig()
+		if err != nil {
+			return nil, err
+		}
+		return contour.NewForConfig(cfg)
+	})
+	val, _ := iface.(contour.Interface)
+	return val, err
+}
+
 func (p *SingletonClientGenerator) GlooClient() (gloo.Interface, error) {
 	iface, err := p.glooClient.Do(func() (interface{}, error) {
 		log.Infof("Instantiating new Gloo client")
@@ -312,15 +328,7 @@ func BuildWithConfig(source string, p ClientGenerator, cfg *Config) (Source, err
 		}
 		return NewAmbassadorHostSource(dynamicClient, kubernetesClient, cfg.Namespace)
 	case "contour-ingressroute":
-		kubernetesClient, err := p.KubeClient()
-		if err != nil {
-			return nil, err
-		}
-		dynamicClient, err := p.DynamicKubernetesClient()
-		if err != nil {
-			return nil, err
-		}
-		return NewContourIngressRouteSource(dynamicClient, kubernetesClient, cfg.ContourLoadBalancerService, cfg.Namespace, cfg.AnnotationFilter, cfg.FQDNTemplate, cfg.CombineFQDNAndAnnotation, cfg.IgnoreHostnameAnnotation)
+		return NewContourIngressRouteSource(p, cfg)
 	case "contour-httpproxy":
 		dynamicClient, err := p.DynamicKubernetesClient()
 		if err != nil {

@@ -20,20 +20,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pkg/errors"
-	contour "github.com/projectcontour/contour/apis/contour/v1beta1"
-	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	fakeDynamic "k8s.io/client-go/dynamic/fake"
-	fakeKube "k8s.io/client-go/kubernetes/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"sigs.k8s.io/external-dns/endpoint"
+	contour_v1b1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/apis/contour/v1beta1"
+	projcontour "sigs.k8s.io/external-dns/third_party/projectcontour.io/apis/projectcontour/v1"
+	contourfake "sigs.k8s.io/external-dns/third_party/projectcontour.io/clientset/versioned/fake"
 )
 
 // This is a compile-time validation that ingressRouteSource is a Source.
@@ -43,13 +40,12 @@ type IngressRouteSuite struct {
 	suite.Suite
 	source       Source
 	loadBalancer *v1.Service
-	ingressRoute *contour.IngressRoute
+	ingressRoute *contour_v1b1.IngressRoute
 }
 
 func (suite *IngressRouteSuite) SetupTest() {
-	fakeKubernetesClient := fakeKube.NewSimpleClientset()
-	fakeDynamicClient, s := newDynamicKubernetesClient()
-	var err error
+	ctx := context.Background()
+	kubeClient, contourClient, clients := fakeContourClients()
 
 	suite.loadBalancer = (fakeLoadBalancerService{
 		ips:       []string{"8.8.8.8"},
@@ -58,35 +54,23 @@ func (suite *IngressRouteSuite) SetupTest() {
 		name:      "contour",
 	}).Service()
 
-	_, err = fakeKubernetesClient.CoreV1().Services(suite.loadBalancer.Namespace).Create(context.Background(), suite.loadBalancer, metav1.CreateOptions{})
+	_, err := kubeClient.CoreV1().Services(suite.loadBalancer.Namespace).Create(ctx, suite.loadBalancer, metav1.CreateOptions{})
 	suite.NoError(err, "should succeed")
-
-	suite.source, err = NewContourIngressRouteSource(
-		fakeDynamicClient,
-		fakeKubernetesClient,
-		"heptio-contour/contour",
-		"default",
-		"",
-		"{{.Name}}",
-		false,
-		false,
-	)
-	suite.NoError(err, "should initialize ingressroute source")
 
 	suite.ingressRoute = (fakeIngressRoute{
 		name:      "foo-ingressroute-with-targets",
 		namespace: "default",
 		host:      "example.com",
 	}).IngressRoute()
-
-	// Convert to unstructured
-	unstructuredIngressRoute, err := convertIngressRouteToUnstructured(suite.ingressRoute, s)
-	if err != nil {
-		suite.Error(err)
-	}
-
-	_, err = fakeDynamicClient.Resource(contour.IngressRouteGVR).Namespace(suite.ingressRoute.Namespace).Create(context.Background(), unstructuredIngressRoute, metav1.CreateOptions{})
+	_, err = contourClient.ContourV1beta1().IngressRoutes(suite.ingressRoute.Namespace).Create(ctx, suite.ingressRoute, metav1.CreateOptions{})
 	suite.NoError(err, "should succeed")
+
+	suite.source, err = NewContourIngressRouteSource(clients, &Config{
+		ContourLoadBalancerService: "heptio-contour/contour",
+		Namespace:                  "default",
+		FQDNTemplate:               "{{.Name}}",
+	})
+	suite.NoError(err, "should initialize ingressroute source")
 }
 
 func (suite *IngressRouteSuite) TestResourceLabelIsSet() {
@@ -94,21 +78,6 @@ func (suite *IngressRouteSuite) TestResourceLabelIsSet() {
 	for _, ep := range endpoints {
 		suite.Equal("ingressroute/default/foo-ingressroute-with-targets", ep.Labels[endpoint.ResourceLabelKey], "should set correct resource label")
 	}
-}
-
-func newDynamicKubernetesClient() (*fakeDynamic.FakeDynamicClient, *runtime.Scheme) {
-	s := runtime.NewScheme()
-	_ = contour.AddToScheme(s)
-	_ = projectcontour.AddToScheme(s)
-	return fakeDynamic.NewSimpleDynamicClient(s), s
-}
-
-func convertIngressRouteToUnstructured(ir *contour.IngressRoute, s *runtime.Scheme) (*unstructured.Unstructured, error) {
-	unstructuredIngressRoute := &unstructured.Unstructured{}
-	if err := s.Convert(ir, unstructuredIngressRoute, context.Background()); err != nil {
-		return nil, err
-	}
-	return unstructuredIngressRoute, nil
 }
 
 func TestIngressRoute(t *testing.T) {
@@ -163,18 +132,13 @@ func TestNewContourIngressRouteSource(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			fakeDynamicClient, _ := newDynamicKubernetesClient()
-
-			_, err := NewContourIngressRouteSource(
-				fakeDynamicClient,
-				fakeKube.NewSimpleClientset(),
-				"heptio-contour/contour",
-				"",
-				ti.annotationFilter,
-				ti.fqdnTemplate,
-				ti.combineFQDNAndAnnotation,
-				false,
-			)
+			_, _, clients := fakeContourClients()
+			_, err := NewContourIngressRouteSource(clients, &Config{
+				ContourLoadBalancerService: "heptio-contour/contour",
+				AnnotationFilter:           ti.annotationFilter,
+				FQDNTemplate:               ti.fqdnTemplate,
+				CombineFQDNAndAnnotation:   ti.combineFQDNAndAnnotation,
+			})
 			if ti.expectError {
 				assert.Error(t, err)
 			} else {
@@ -282,13 +246,27 @@ func testEndpointsFromIngressRoute(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			if source, err := newTestIngressRouteSource(ti.loadBalancer); err != nil {
-				require.NoError(t, err)
-			} else if endpoints, err := source.endpointsFromIngressRoute(context.Background(), ti.ingressRoute.IngressRoute()); err != nil {
-				require.NoError(t, err)
-			} else {
-				validateEndpoints(t, endpoints, ti.expected)
-			}
+			ctx := context.Background()
+			kubeClient, contourClient, clients := fakeContourClients()
+
+			svc := ti.loadBalancer.Service()
+			_, err := kubeClient.CoreV1().Services(svc.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			rt := ti.ingressRoute.IngressRoute()
+			_, err = contourClient.ContourV1beta1().IngressRoutes(rt.Namespace).Create(ctx, rt, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			src, err := NewContourIngressRouteSource(clients, &Config{
+				ContourLoadBalancerService: svc.Namespace + "/" + svc.Name,
+				Namespace:                  "default",
+				FQDNTemplate:               "{{.Name}}",
+			})
+			require.NoError(t, err)
+
+			endpoints, err := src.Endpoints(ctx)
+			require.NoError(t, err)
+			validateEndpoints(t, endpoints, ti.expected)
 		})
 	}
 }
@@ -317,6 +295,8 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "two simple ingressroutes",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
+				name:      "envoy",
+				namespace: "test-contour",
 				ips:       []string{"8.8.8.8"},
 				hostnames: []string{"lb.com"},
 			},
@@ -355,6 +335,8 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "two simple ingressroutes on different namespaces",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
+				name:      "envoy",
+				namespace: "test-contour",
 				ips:       []string{"8.8.8.8"},
 				hostnames: []string{"lb.com"},
 			},
@@ -393,6 +375,8 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "two simple ingressroutes on different namespaces and a target namespace",
 			targetNamespace: "testing1",
 			loadBalancer: fakeLoadBalancerService{
+				name:      "envoy",
+				namespace: "test-contour",
 				ips:       []string{"8.8.8.8"},
 				hostnames: []string{"lb.com"},
 			},
@@ -424,7 +408,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			targetNamespace:  "",
 			annotationFilter: "contour.heptio.com/ingress.class in (alb, contour)",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -448,7 +434,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			targetNamespace:  "",
 			annotationFilter: "contour.heptio.com/ingress.class in (alb, contour)",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -467,7 +455,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			targetNamespace:  "",
 			annotationFilter: "contour.heptio.com/ingress.name in (a b)",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -487,7 +477,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			targetNamespace:  "",
 			annotationFilter: "contour.heptio.com/ingress.class=contour",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -511,7 +503,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			targetNamespace:  "",
 			annotationFilter: "contour.heptio.com/ingress.class=contour",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -529,7 +523,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "our controller type is dns-controller",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -552,7 +548,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "different controller types are ignored",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -570,6 +568,8 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "template for ingressroute if host is missing",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
+				name:      "envoy",
+				namespace: "test-contour",
 				ips:       []string{"8.8.8.8"},
 				hostnames: []string{"elb.com"},
 			},
@@ -599,7 +599,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "another controller annotation skipped even with template",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -618,7 +620,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "multiple FQDN template hostnames",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -646,7 +650,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "multiple FQDN template hostnames",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -698,7 +704,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "ingressroute rules with annotation",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -748,7 +756,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "ingressroute rules with hostname annotation",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"1.2.3.4"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"1.2.3.4"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -777,7 +787,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "ingressroute rules with hostname annotation having multiple hostnames",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"1.2.3.4"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"1.2.3.4"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -841,7 +853,9 @@ func testIngressRouteEndpoints(t *testing.T) {
 			title:           "ingressroute rules with annotation and custom TTL",
 			targetNamespace: "",
 			loadBalancer: fakeLoadBalancerService{
-				ips: []string{"8.8.8.8"},
+				name:      "envoy",
+				namespace: "test-contour",
+				ips:       []string{"8.8.8.8"},
 			},
 			ingressRouteItems: []fakeIngressRoute{
 				{
@@ -964,8 +978,10 @@ func testIngressRouteEndpoints(t *testing.T) {
 		},
 		{
 			title:           "ignore hostname annotations",
-			targetNamespace: "",
+			targetNamespace: namespace,
 			loadBalancer: fakeLoadBalancerService{
+				name:      "envoy",
+				namespace: "test-contour",
 				ips:       []string{"8.8.8.8"},
 				hostnames: []string{"lb.com"},
 			},
@@ -1011,82 +1027,49 @@ func testIngressRouteEndpoints(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			ingressRoutes := make([]*contour.IngressRoute, 0)
+			ctx := context.Background()
+			kubeClient, contourClient, clients := fakeContourClients()
+
 			for _, item := range ti.ingressRouteItems {
-				ingressRoutes = append(ingressRoutes, item.IngressRoute())
-			}
-
-			fakeKubernetesClient := fakeKube.NewSimpleClientset()
-
-			lbService := ti.loadBalancer.Service()
-			_, err := fakeKubernetesClient.CoreV1().Services(lbService.Namespace).Create(context.Background(), lbService, metav1.CreateOptions{})
-			if err != nil {
+				route := item.IngressRoute()
+				_, err := contourClient.ContourV1beta1().IngressRoutes(route.Namespace).Create(ctx, route, metav1.CreateOptions{})
 				require.NoError(t, err)
 			}
 
-			fakeDynamicClient, scheme := newDynamicKubernetesClient()
-			for _, ingressRoute := range ingressRoutes {
-				converted, err := convertIngressRouteToUnstructured(ingressRoute, scheme)
-				require.NoError(t, err)
-				_, err = fakeDynamicClient.Resource(contour.IngressRouteGVR).Namespace(ingressRoute.Namespace).Create(context.Background(), converted, metav1.CreateOptions{})
-				require.NoError(t, err)
-			}
-
-			ingressRouteSource, err := NewContourIngressRouteSource(
-				fakeDynamicClient,
-				fakeKubernetesClient,
-				lbService.Namespace+"/"+lbService.Name,
-				ti.targetNamespace,
-				ti.annotationFilter,
-				ti.fqdnTemplate,
-				ti.combineFQDNAndAnnotation,
-				ti.ignoreHostnameAnnotation,
-			)
+			svc := ti.loadBalancer.Service()
+			_, err := kubeClient.CoreV1().Services(svc.Namespace).Create(ctx, svc, metav1.CreateOptions{})
 			require.NoError(t, err)
 
-			res, err := ingressRouteSource.Endpoints(context.Background())
+			src, err := NewContourIngressRouteSource(clients, &Config{
+				ContourLoadBalancerService: svc.Namespace + "/" + svc.Name,
+				Namespace:                  ti.targetNamespace,
+				AnnotationFilter:           ti.annotationFilter,
+				FQDNTemplate:               ti.fqdnTemplate,
+				CombineFQDNAndAnnotation:   ti.combineFQDNAndAnnotation,
+				IgnoreHostnameAnnotation:   ti.ignoreHostnameAnnotation,
+			})
+			require.NoError(t, err)
+
+			res, err := src.Endpoints(ctx)
 			if ti.expectError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
 			}
-
 			validateEndpoints(t, res, ti.expected)
 		})
 	}
 }
 
-// ingressroute specific helper functions
-func newTestIngressRouteSource(loadBalancer fakeLoadBalancerService) (*ingressRouteSource, error) {
-	fakeKubernetesClient := fakeKube.NewSimpleClientset()
-	fakeDynamicClient, _ := newDynamicKubernetesClient()
+func fakeContourClients() (*kubefake.Clientset, *contourfake.Clientset, ClientGenerator) {
+	kubeClient := kubefake.NewSimpleClientset()
+	contourClient := contourfake.NewSimpleClientset()
 
-	lbService := loadBalancer.Service()
-	_, err := fakeKubernetesClient.CoreV1().Services(lbService.Namespace).Create(context.Background(), lbService, metav1.CreateOptions{})
-	if err != nil {
-		return nil, err
-	}
+	clients := new(MockClientGenerator)
+	clients.On("KubeClient").Return(kubeClient, nil)
+	clients.On("ContourClient").Return(contourClient, nil)
 
-	src, err := NewContourIngressRouteSource(
-		fakeDynamicClient,
-		fakeKubernetesClient,
-		lbService.Namespace+"/"+lbService.Name,
-		"default",
-		"",
-		"{{.Name}}",
-		false,
-		false,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	irsrc, ok := src.(*ingressRouteSource)
-	if !ok {
-		return nil, errors.New("underlying source type was not ingressroute")
-	}
-
-	return irsrc, nil
+	return kubeClient, contourClient, clients
 }
 
 type fakeLoadBalancerService struct {
@@ -1119,7 +1102,6 @@ func (ig fakeLoadBalancerService) Service() *v1.Service {
 			Hostname: hostname,
 		})
 	}
-
 	return svc
 }
 
@@ -1133,36 +1115,28 @@ type fakeIngressRoute struct {
 	delegate bool
 }
 
-func (ir fakeIngressRoute) IngressRoute() *contour.IngressRoute {
-	var status string
+func (ir fakeIngressRoute) IngressRoute() *contour_v1b1.IngressRoute {
+	status := "valid"
 	if ir.invalid {
 		status = "invalid"
-	} else {
-		status = "valid"
 	}
 
-	var spec contour.IngressRouteSpec
-	if ir.delegate {
-		spec = contour.IngressRouteSpec{}
-	} else {
-		spec = contour.IngressRouteSpec{
-			VirtualHost: &contour.VirtualHost{
-				Fqdn: ir.host,
-			},
+	var spec contour_v1b1.IngressRouteSpec
+	if !ir.delegate {
+		spec.VirtualHost = &contour_v1b1.VirtualHost{
+			Fqdn: ir.host,
 		}
 	}
 
-	ingressRoute := &contour.IngressRoute{
+	return &contour_v1b1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   ir.namespace,
 			Name:        ir.name,
 			Annotations: ir.annotations,
 		},
 		Spec: spec,
-		Status: projectcontour.Status{
+		Status: projcontour.Status{
 			CurrentStatus: status,
 		},
 	}
-
-	return ingressRoute
 }

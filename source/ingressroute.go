@@ -25,167 +25,146 @@ import (
 	"text/template"
 
 	"github.com/pkg/errors"
-	contour "github.com/projectcontour/contour/apis/contour/v1beta1"
 	log "github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
+	kubeinformers "k8s.io/client-go/informers"
+	kubeinformers_corev1 "k8s.io/client-go/informers/core/v1"
 
 	"sigs.k8s.io/external-dns/endpoint"
+	contour_v1b1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/apis/contour/v1beta1"
+	contourinformers "sigs.k8s.io/external-dns/third_party/projectcontour.io/informers/externalversions"
+	contourinformers_v1b1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/informers/externalversions/contour/v1beta1"
 )
 
 // ingressRouteSource is an implementation of Source for ProjectContour IngressRoute objects.
 // The IngressRoute implementation uses the spec.virtualHost.fqdn value for the hostname.
 // Use targetAnnotationKey to explicitly set Endpoint.
 type ingressRouteSource struct {
-	dynamicKubeClient          dynamic.Interface
-	kubeClient                 kubernetes.Interface
-	contourLoadBalancerService string
-	namespace                  string
-	annotationFilter           string
-	fqdnTemplate               *template.Template
-	combineFQDNAnnotation      bool
-	ignoreHostnameAnnotation   bool
-	ingressRouteInformer       informers.GenericInformer
-	unstructuredConverter      *UnstructuredConverter
+	serviceInformer      kubeinformers_corev1.ServiceInformer
+	ingressRouteInformer contourinformers_v1b1.IngressRouteInformer
+
+	namespace                string
+	lbService                types.NamespacedName
+	fqdnTemplate             *template.Template
+	annotationSelector       labels.Selector
+	combineFQDNAnnotation    bool
+	ignoreHostnameAnnotation bool
 }
 
 // NewContourIngressRouteSource creates a new contourIngressRouteSource with the given config.
-func NewContourIngressRouteSource(
-	dynamicKubeClient dynamic.Interface,
-	kubeClient kubernetes.Interface,
-	contourLoadBalancerService string,
-	namespace string,
-	annotationFilter string,
-	fqdnTemplate string,
-	combineFqdnAnnotation bool,
-	ignoreHostnameAnnotation bool,
-) (Source, error) {
-	tmpl, err := parseTemplate(fqdnTemplate)
+func NewContourIngressRouteSource(clients ClientGenerator, config *Config) (Source, error) {
+	tmpl, err := parseTemplate(config.FQDNTemplate)
+	if err != nil {
+		return nil, err
+	}
+	lbNamespace, lbName, err := parseContourLoadBalancerService(config.ContourLoadBalancerService)
+	if err != nil {
+		return nil, err
+	}
+	annotationSelector, err := labels.Parse(config.AnnotationFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, _, err = parseContourLoadBalancerService(contourLoadBalancerService); err != nil {
-		return nil, err
-	}
-
-	// Use shared informer to listen for add/update/delete of ingressroutes in the specified namespace.
-	// Set resync period to 0, to prevent processing when nothing has changed.
-	informerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicKubeClient, 0, namespace, nil)
-	ingressRouteInformer := informerFactory.ForResource(contour.IngressRouteGVR)
-
-	// Add default resource event handlers to properly initialize informer.
-	ingressRouteInformer.Informer().AddEventHandler(
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-			},
-		},
-	)
-
-	// TODO informer is not explicitly stopped since controller is not passing in its channel.
-	informerFactory.Start(wait.NeverStop)
-
-	// wait for the local cache to be populated.
-	if err := waitForDynamicCacheSync(context.Background(), informerFactory); err != nil {
-		return nil, err
-	}
-
-	uc, err := NewUnstructuredConverter()
+	kubeClient, err := clients.KubeClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup Unstructured Converter: %v", err)
+		return nil, err
+	}
+	contourClient, err := clients.ContourClient()
+	if err != nil {
+		return nil, err
+	}
+
+	kubeInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(lbNamespace))
+	serviceInformer := kubeInformerFactory.Core().V1().Services()
+	serviceInformer.Informer() // Register with factory before starting
+	kubeInformerFactory.Start(wait.NeverStop)
+
+	contourInformerFactory := contourinformers.NewSharedInformerFactoryWithOptions(contourClient, 0, contourinformers.WithNamespace(config.Namespace))
+	ingressRouteInformer := contourInformerFactory.Contour().V1beta1().IngressRoutes()
+	ingressRouteInformer.Informer() // Register with factory before starting
+	contourInformerFactory.Start(wait.NeverStop)
+
+	// Wait for the local cache to be populated.
+	if err := waitForCacheSync(context.Background(), kubeInformerFactory); err != nil {
+		return nil, err
+	}
+	if err := waitForCacheSync(context.Background(), contourInformerFactory); err != nil {
+		return nil, err
 	}
 
 	return &ingressRouteSource{
-		dynamicKubeClient:          dynamicKubeClient,
-		kubeClient:                 kubeClient,
-		contourLoadBalancerService: contourLoadBalancerService,
-		namespace:                  namespace,
-		annotationFilter:           annotationFilter,
-		fqdnTemplate:               tmpl,
-		combineFQDNAnnotation:      combineFqdnAnnotation,
-		ignoreHostnameAnnotation:   ignoreHostnameAnnotation,
-		ingressRouteInformer:       ingressRouteInformer,
-		unstructuredConverter:      uc,
+		serviceInformer:      serviceInformer,
+		ingressRouteInformer: ingressRouteInformer,
+		lbService: types.NamespacedName{
+			Namespace: lbNamespace,
+			Name:      lbName,
+		},
+		fqdnTemplate:             tmpl,
+		annotationSelector:       annotationSelector,
+		combineFQDNAnnotation:    config.CombineFQDNAndAnnotation,
+		ignoreHostnameAnnotation: config.IgnoreHostnameAnnotation,
 	}, nil
+}
+
+func (sc *ingressRouteSource) AddEventHandler(ctx context.Context, handler func()) {
+	sc.ingressRouteInformer.Informer().AddEventHandler(eventHandlerFunc(handler))
+	sc.serviceInformer.Informer().AddEventHandler(eventHandlerFunc(handler))
 }
 
 // Endpoints returns endpoint objects for each host-target combination that should be processed.
 // Retrieves all ingressroute resources in the source's namespace(s).
 func (sc *ingressRouteSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error) {
-	irs, err := sc.ingressRouteInformer.Lister().ByNamespace(sc.namespace).List(labels.Everything())
+	routes, err := sc.ingressRouteInformer.Lister().IngressRoutes(sc.namespace).List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to []*contour.IngressRoute
-	var ingressRoutes []*contour.IngressRoute
-	for _, ir := range irs {
-		unstrucuredIR, ok := ir.(*unstructured.Unstructured)
-		if !ok {
-			return nil, errors.New("could not convert")
+	var endpoints []*endpoint.Endpoint
+	for _, rt := range routes {
+		// Filter by annotations.
+		if !sc.annotationSelector.Matches(labels.Set(rt.Annotations)) {
+			continue
 		}
-
-		irConverted := &contour.IngressRoute{}
-		err := sc.unstructuredConverter.scheme.Convert(unstrucuredIR, irConverted, nil)
-		if err != nil {
-			return nil, err
-		}
-		ingressRoutes = append(ingressRoutes, irConverted)
-	}
-
-	ingressRoutes, err = sc.filterByAnnotations(ingressRoutes)
-	if err != nil {
-		return nil, err
-	}
-
-	endpoints := []*endpoint.Endpoint{}
-
-	for _, ir := range ingressRoutes {
 		// Check controller annotation to see if we are responsible.
-		controller, ok := ir.Annotations[controllerAnnotationKey]
-		if ok && controller != controllerAnnotationValue {
+		if controller, ok := rt.Annotations[controllerAnnotationKey]; ok && controller != controllerAnnotationValue {
 			log.Debugf("Skipping ingressroute %s/%s because controller value does not match, found: %s, required: %s",
-				ir.Namespace, ir.Name, controller, controllerAnnotationValue)
+				rt.Namespace, rt.Name, controller, controllerAnnotationValue)
 			continue
-		} else if ir.CurrentStatus != "valid" {
-			log.Debugf("Skipping ingressroute %s/%s because it is not valid", ir.Namespace, ir.Name)
+		}
+		// Skip invalid ingress routes.
+		if rt.CurrentStatus != "valid" {
+			log.Debugf("Skipping ingressroute %s/%s because it is not valid", rt.Namespace, rt.Name)
 			continue
 		}
 
-		irEndpoints, err := sc.endpointsFromIngressRoute(ctx, ir)
+		eps, err := sc.endpointsFromIngressRoute(ctx, rt)
 		if err != nil {
 			return nil, err
 		}
-
-		// apply template if fqdn is missing on ingressroute
-		if (sc.combineFQDNAnnotation || len(irEndpoints) == 0) && sc.fqdnTemplate != nil {
-			tmplEndpoints, err := sc.endpointsFromTemplate(ctx, ir)
+		// Apply template if fqdn is missing on IngressRoute.
+		if (sc.combineFQDNAnnotation || len(eps) == 0) && sc.fqdnTemplate != nil {
+			tmplEndpoints, err := sc.endpointsFromTemplate(ctx, rt)
 			if err != nil {
 				return nil, err
 			}
 
 			if sc.combineFQDNAnnotation {
-				irEndpoints = append(irEndpoints, tmplEndpoints...)
+				eps = append(eps, tmplEndpoints...)
 			} else {
-				irEndpoints = tmplEndpoints
+				eps = tmplEndpoints
 			}
 		}
-
-		if len(irEndpoints) == 0 {
-			log.Debugf("No endpoints could be generated from ingressroute %s/%s", ir.Namespace, ir.Name)
+		if len(eps) == 0 {
+			log.Debugf("No endpoints could be generated from ingressroute %s/%s", rt.Namespace, rt.Name)
 			continue
 		}
 
-		log.Debugf("Endpoints generated from ingressroute: %s/%s: %v", ir.Namespace, ir.Name, irEndpoints)
-		sc.setResourceLabel(ir, irEndpoints)
-		endpoints = append(endpoints, irEndpoints...)
+		log.Debugf("Endpoints generated from ingressroute: %s/%s: %v", rt.Namespace, rt.Name, eps)
+		sc.setResourceLabel(rt, eps)
+		endpoints = append(endpoints, eps...)
 	}
 
 	for _, ep := range endpoints {
@@ -195,7 +174,7 @@ func (sc *ingressRouteSource) Endpoints(ctx context.Context) ([]*endpoint.Endpoi
 	return endpoints, nil
 }
 
-func (sc *ingressRouteSource) endpointsFromTemplate(ctx context.Context, ingressRoute *contour.IngressRoute) ([]*endpoint.Endpoint, error) {
+func (sc *ingressRouteSource) endpointsFromTemplate(ctx context.Context, ingressRoute *contour_v1b1.IngressRoute) ([]*endpoint.Endpoint, error) {
 	// Process the whole template string
 	var buf bytes.Buffer
 	err := sc.fqdnTemplate.Execute(&buf, ingressRoute)
@@ -231,79 +210,44 @@ func (sc *ingressRouteSource) endpointsFromTemplate(ctx context.Context, ingress
 	return endpoints, nil
 }
 
-// filterByAnnotations filters a list of configs by a given annotation selector.
-func (sc *ingressRouteSource) filterByAnnotations(ingressRoutes []*contour.IngressRoute) ([]*contour.IngressRoute, error) {
-	labelSelector, err := metav1.ParseToLabelSelector(sc.annotationFilter)
-	if err != nil {
-		return nil, err
-	}
-	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		return nil, err
-	}
-
-	// empty filter returns original list
-	if selector.Empty() {
-		return ingressRoutes, nil
-	}
-
-	filteredList := []*contour.IngressRoute{}
-
-	for _, ingressRoute := range ingressRoutes {
-		// convert the ingressroute's annotations to an equivalent label selector
-		annotations := labels.Set(ingressRoute.Annotations)
-
-		// include ingressroute if its annotations match the selector
-		if selector.Matches(annotations) {
-			filteredList = append(filteredList, ingressRoute)
-		}
-	}
-
-	return filteredList, nil
-}
-
-func (sc *ingressRouteSource) setResourceLabel(ingressRoute *contour.IngressRoute, endpoints []*endpoint.Endpoint) {
+func (sc *ingressRouteSource) setResourceLabel(ingressRoute *contour_v1b1.IngressRoute, endpoints []*endpoint.Endpoint) {
 	for _, ep := range endpoints {
 		ep.Labels[endpoint.ResourceLabelKey] = fmt.Sprintf("ingressroute/%s/%s", ingressRoute.Namespace, ingressRoute.Name)
 	}
 }
 
 func (sc *ingressRouteSource) targetsFromContourLoadBalancer(ctx context.Context) (targets endpoint.Targets, err error) {
-	lbNamespace, lbName, err := parseContourLoadBalancerService(sc.contourLoadBalancerService)
+	svc, err := sc.serviceInformer.Lister().Services(sc.lbService.Namespace).Get(sc.lbService.Name)
 	if err != nil {
-		return nil, err
-	}
-	if svc, err := sc.kubeClient.CoreV1().Services(lbNamespace).Get(ctx, lbName, metav1.GetOptions{}); err != nil {
 		log.Warn(err)
-	} else {
-		for _, lb := range svc.Status.LoadBalancer.Ingress {
-			if lb.IP != "" {
-				targets = append(targets, lb.IP)
-			}
-			if lb.Hostname != "" {
-				targets = append(targets, lb.Hostname)
-			}
+		return nil, nil
+	}
+	for _, lb := range svc.Status.LoadBalancer.Ingress {
+		if lb.IP != "" {
+			targets = append(targets, lb.IP)
+		}
+		if lb.Hostname != "" {
+			targets = append(targets, lb.Hostname)
 		}
 	}
-
-	return
+	return targets, nil
 }
 
 // endpointsFromIngressRouteConfig extracts the endpoints from a Contour IngressRoute object
-func (sc *ingressRouteSource) endpointsFromIngressRoute(ctx context.Context, ingressRoute *contour.IngressRoute) ([]*endpoint.Endpoint, error) {
-	if ingressRoute.CurrentStatus != "valid" {
-		log.Warn(errors.Errorf("cannot generate endpoints for ingressroute with status %s", ingressRoute.CurrentStatus))
+func (sc *ingressRouteSource) endpointsFromIngressRoute(ctx context.Context, route *contour_v1b1.IngressRoute) ([]*endpoint.Endpoint, error) {
+	if route.CurrentStatus != "valid" {
+		log.Warn(errors.Errorf("cannot generate endpoints for ingressroute with status %s", route.CurrentStatus))
 		return nil, nil
 	}
 
 	var endpoints []*endpoint.Endpoint
 
-	ttl, err := getTTLFromAnnotations(ingressRoute.Annotations)
+	ttl, err := getTTLFromAnnotations(route.Annotations)
 	if err != nil {
 		log.Warn(err)
 	}
 
-	targets := getTargetsFromTargetAnnotation(ingressRoute.Annotations)
+	targets := getTargetsFromTargetAnnotation(route.Annotations)
 
 	if len(targets) == 0 {
 		targets, err = sc.targetsFromContourLoadBalancer(ctx)
@@ -312,9 +256,9 @@ func (sc *ingressRouteSource) endpointsFromIngressRoute(ctx context.Context, ing
 		}
 	}
 
-	providerSpecific, setIdentifier := getProviderSpecificAnnotations(ingressRoute.Annotations)
+	providerSpecific, setIdentifier := getProviderSpecificAnnotations(route.Annotations)
 
-	if virtualHost := ingressRoute.Spec.VirtualHost; virtualHost != nil {
+	if virtualHost := route.Spec.VirtualHost; virtualHost != nil {
 		if fqdn := virtualHost.Fqdn; fqdn != "" {
 			endpoints = append(endpoints, endpointsForHostname(fqdn, targets, ttl, providerSpecific, setIdentifier)...)
 		}
@@ -322,7 +266,7 @@ func (sc *ingressRouteSource) endpointsFromIngressRoute(ctx context.Context, ing
 
 	// Skip endpoints if we do not want entries from annotations
 	if !sc.ignoreHostnameAnnotation {
-		hostnameList := getHostnamesFromAnnotations(ingressRoute.Annotations)
+		hostnameList := getHostnamesFromAnnotations(route.Annotations)
 		for _, hostname := range hostnameList {
 			endpoints = append(endpoints, endpointsForHostname(hostname, targets, ttl, providerSpecific, setIdentifier)...)
 		}
@@ -340,7 +284,4 @@ func parseContourLoadBalancerService(service string) (namespace, name string, er
 	}
 
 	return
-}
-
-func (sc *ingressRouteSource) AddEventHandler(ctx context.Context, handler func()) {
 }
