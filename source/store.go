@@ -330,11 +330,7 @@ func BuildWithConfig(source string, p ClientGenerator, cfg *Config) (Source, err
 	case "contour-ingressroute":
 		return NewContourIngressRouteSource(p, cfg)
 	case "contour-httpproxy":
-		dynamicClient, err := p.DynamicKubernetesClient()
-		if err != nil {
-			return nil, err
-		}
-		return NewContourHTTPProxySource(dynamicClient, cfg.Namespace, cfg.AnnotationFilter, cfg.FQDNTemplate, cfg.CombineFQDNAndAnnotation, cfg.IgnoreHostnameAnnotation)
+		return NewContourHTTPProxySource(p, cfg)
 	case "gloo-proxy":
 		return NewGlooSource(p, cfg)
 	case "openshift-route":

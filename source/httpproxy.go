@@ -25,156 +25,113 @@ import (
 	"text/template"
 
 	"github.com/pkg/errors"
-	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	log "github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/tools/cache"
 
 	"sigs.k8s.io/external-dns/endpoint"
+	projcontour_v1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/apis/projectcontour/v1"
+	informers "sigs.k8s.io/external-dns/third_party/projectcontour.io/informers/externalversions"
+	informers_v1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/informers/externalversions/projectcontour/v1"
 )
 
 // HTTPProxySource is an implementation of Source for ProjectContour HTTPProxy objects.
 // The HTTPProxy implementation uses the spec.virtualHost.fqdn value for the hostname.
 // Use targetAnnotationKey to explicitly set Endpoint.
 type httpProxySource struct {
-	dynamicKubeClient        dynamic.Interface
+	httpProxyInformer informers_v1.HTTPProxyInformer
+
 	namespace                string
-	annotationFilter         string
 	fqdnTemplate             *template.Template
+	annotationSelector       labels.Selector
 	combineFQDNAnnotation    bool
 	ignoreHostnameAnnotation bool
-	httpProxyInformer        informers.GenericInformer
-	unstructuredConverter    *UnstructuredConverter
 }
 
 // NewContourHTTPProxySource creates a new contourHTTPProxySource with the given config.
-func NewContourHTTPProxySource(
-	dynamicKubeClient dynamic.Interface,
-	namespace string,
-	annotationFilter string,
-	fqdnTemplate string,
-	combineFqdnAnnotation bool,
-	ignoreHostnameAnnotation bool,
-) (Source, error) {
-	tmpl, err := parseTemplate(fqdnTemplate)
+func NewContourHTTPProxySource(clients ClientGenerator, config *Config) (Source, error) {
+	tmpl, err := parseTemplate(config.FQDNTemplate)
+	if err != nil {
+		return nil, err
+	}
+	annotationSelector, err := labels.Parse(config.AnnotationFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use shared informer to listen for add/update/delete of HTTPProxys in the specified namespace.
-	// Set resync period to 0, to prevent processing when nothing has changed.
-	informerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicKubeClient, 0, namespace, nil)
-	httpProxyInformer := informerFactory.ForResource(projectcontour.HTTPProxyGVR)
-
-	// Add default resource event handlers to properly initialize informer.
-	httpProxyInformer.Informer().AddEventHandler(
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-			},
-		},
-	)
-
-	// TODO informer is not explicitly stopped since controller is not passing in its channel.
+	contourClient, err := clients.ContourClient()
+	if err != nil {
+		return nil, err
+	}
+	informerFactory := informers.NewSharedInformerFactoryWithOptions(contourClient, 0, informers.WithNamespace(config.Namespace))
+	httpProxyInformer := informerFactory.Projectcontour().V1().HTTPProxies()
+	httpProxyInformer.Informer() // Register with factory before starting
 	informerFactory.Start(wait.NeverStop)
 
-	// wait for the local cache to be populated.
-	if err := waitForDynamicCacheSync(context.Background(), informerFactory); err != nil {
+	if err := waitForCacheSync(context.Background(), informerFactory); err != nil {
 		return nil, err
-	}
-
-	uc, err := NewUnstructuredConverter()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to setup Unstructured Converter")
 	}
 
 	return &httpProxySource{
-		dynamicKubeClient:        dynamicKubeClient,
-		namespace:                namespace,
-		annotationFilter:         annotationFilter,
-		fqdnTemplate:             tmpl,
-		combineFQDNAnnotation:    combineFqdnAnnotation,
-		ignoreHostnameAnnotation: ignoreHostnameAnnotation,
 		httpProxyInformer:        httpProxyInformer,
-		unstructuredConverter:    uc,
+		fqdnTemplate:             tmpl,
+		annotationSelector:       annotationSelector,
+		combineFQDNAnnotation:    config.CombineFQDNAndAnnotation,
+		ignoreHostnameAnnotation: config.IgnoreHostnameAnnotation,
 	}, nil
 }
 
 // Endpoints returns endpoint objects for each host-target combination that should be processed.
 // Retrieves all HTTPProxy resources in the source's namespace(s).
 func (sc *httpProxySource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint, error) {
-	hps, err := sc.httpProxyInformer.Lister().ByNamespace(sc.namespace).List(labels.Everything())
+	httpProxies, err := sc.httpProxyInformer.Lister().HTTPProxies(sc.namespace).List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to []*projectcontour.HTTPProxy
-	var httpProxies []*projectcontour.HTTPProxy
-	for _, hp := range hps {
-		unstructuredHP, ok := hp.(*unstructured.Unstructured)
-		if !ok {
-			return nil, errors.New("could not convert")
-		}
-
-		hpConverted := &projectcontour.HTTPProxy{}
-		err := sc.unstructuredConverter.scheme.Convert(unstructuredHP, hpConverted, nil)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to convert to HTTPProxy")
-		}
-		httpProxies = append(httpProxies, hpConverted)
-	}
-
-	httpProxies, err = sc.filterByAnnotations(httpProxies)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to filter HTTPProxies")
-	}
-
-	endpoints := []*endpoint.Endpoint{}
-
+	var endpoints []*endpoint.Endpoint
 	for _, hp := range httpProxies {
+		// Filter by annotations.
+		if !sc.annotationSelector.Matches(labels.Set(hp.Annotations)) {
+			continue
+		}
 		// Check controller annotation to see if we are responsible.
-		controller, ok := hp.Annotations[controllerAnnotationKey]
-		if ok && controller != controllerAnnotationValue {
+		if controller, ok := hp.Annotations[controllerAnnotationKey]; ok && controller != controllerAnnotationValue {
 			log.Debugf("Skipping HTTPProxy %s/%s because controller value does not match, found: %s, required: %s",
 				hp.Namespace, hp.Name, controller, controllerAnnotationValue)
 			continue
-		} else if hp.Status.CurrentStatus != "valid" {
+		}
+		// Skip invalid ingress routes.
+		if hp.Status.CurrentStatus != "valid" {
 			log.Debugf("Skipping HTTPProxy %s/%s because it is not valid", hp.Namespace, hp.Name)
 			continue
 		}
 
-		hpEndpoints, err := sc.endpointsFromHTTPProxy(hp)
+		eps, err := sc.endpointsFromHTTPProxy(hp)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to get endpoints from HTTPProxy")
 		}
-
-		// apply template if fqdn is missing on HTTPProxy
-		if (sc.combineFQDNAnnotation || len(hpEndpoints) == 0) && sc.fqdnTemplate != nil {
+		// Apply template if fqdn is missing on HTTPProxy.
+		if (sc.combineFQDNAnnotation || len(eps) == 0) && sc.fqdnTemplate != nil {
 			tmplEndpoints, err := sc.endpointsFromTemplate(hp)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to get endpoints from template")
 			}
 
 			if sc.combineFQDNAnnotation {
-				hpEndpoints = append(hpEndpoints, tmplEndpoints...)
+				eps = append(eps, tmplEndpoints...)
 			} else {
-				hpEndpoints = tmplEndpoints
+				eps = tmplEndpoints
 			}
 		}
-
-		if len(hpEndpoints) == 0 {
+		if len(eps) == 0 {
 			log.Debugf("No endpoints could be generated from HTTPProxy %s/%s", hp.Namespace, hp.Name)
 			continue
 		}
 
-		log.Debugf("Endpoints generated from HTTPProxy: %s/%s: %v", hp.Namespace, hp.Name, hpEndpoints)
-		sc.setResourceLabel(hp, hpEndpoints)
-		endpoints = append(endpoints, hpEndpoints...)
+		log.Debugf("Endpoints generated from HTTPProxy: %s/%s: %v", hp.Namespace, hp.Name, eps)
+		sc.setResourceLabel(hp, eps)
+		endpoints = append(endpoints, eps...)
 	}
 
 	for _, ep := range endpoints {
@@ -184,7 +141,7 @@ func (sc *httpProxySource) Endpoints(ctx context.Context) ([]*endpoint.Endpoint,
 	return endpoints, nil
 }
 
-func (sc *httpProxySource) endpointsFromTemplate(httpProxy *projectcontour.HTTPProxy) ([]*endpoint.Endpoint, error) {
+func (sc *httpProxySource) endpointsFromTemplate(httpProxy *projcontour_v1.HTTPProxy) ([]*endpoint.Endpoint, error) {
 	// Process the whole template string
 	var buf bytes.Buffer
 	err := sc.fqdnTemplate.Execute(&buf, httpProxy)
@@ -224,45 +181,14 @@ func (sc *httpProxySource) endpointsFromTemplate(httpProxy *projectcontour.HTTPP
 	return endpoints, nil
 }
 
-// filterByAnnotations filters a list of configs by a given annotation selector.
-func (sc *httpProxySource) filterByAnnotations(httpProxies []*projectcontour.HTTPProxy) ([]*projectcontour.HTTPProxy, error) {
-	labelSelector, err := metav1.ParseToLabelSelector(sc.annotationFilter)
-	if err != nil {
-		return nil, err
-	}
-	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		return nil, err
-	}
-
-	// empty filter returns original list
-	if selector.Empty() {
-		return httpProxies, nil
-	}
-
-	filteredList := []*projectcontour.HTTPProxy{}
-
-	for _, httpProxy := range httpProxies {
-		// convert the HTTPProxy's annotations to an equivalent label selector
-		annotations := labels.Set(httpProxy.Annotations)
-
-		// include HTTPProxy if its annotations match the selector
-		if selector.Matches(annotations) {
-			filteredList = append(filteredList, httpProxy)
-		}
-	}
-
-	return filteredList, nil
-}
-
-func (sc *httpProxySource) setResourceLabel(httpProxy *projectcontour.HTTPProxy, endpoints []*endpoint.Endpoint) {
+func (sc *httpProxySource) setResourceLabel(httpProxy *projcontour_v1.HTTPProxy, endpoints []*endpoint.Endpoint) {
 	for _, ep := range endpoints {
 		ep.Labels[endpoint.ResourceLabelKey] = fmt.Sprintf("HTTPProxy/%s/%s", httpProxy.Namespace, httpProxy.Name)
 	}
 }
 
 // endpointsFromHTTPProxyConfig extracts the endpoints from a Contour HTTPProxy object
-func (sc *httpProxySource) endpointsFromHTTPProxy(httpProxy *projectcontour.HTTPProxy) ([]*endpoint.Endpoint, error) {
+func (sc *httpProxySource) endpointsFromHTTPProxy(httpProxy *projcontour_v1.HTTPProxy) ([]*endpoint.Endpoint, error) {
 	if httpProxy.Status.CurrentStatus != "valid" {
 		log.Warn(errors.Errorf("cannot generate endpoints for HTTPProxy with status %s", httpProxy.Status.CurrentStatus))
 		return nil, nil

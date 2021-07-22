@@ -20,19 +20,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pkg/errors"
-	contour "github.com/projectcontour/contour/apis/contour/v1beta1"
-	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"sigs.k8s.io/external-dns/endpoint"
+	projcontour_v1 "sigs.k8s.io/external-dns/third_party/projectcontour.io/apis/projectcontour/v1"
 )
 
 // This is a compile-time validation that httpProxySource is a Source.
@@ -41,37 +36,26 @@ var _ Source = &httpProxySource{}
 type HTTPProxySuite struct {
 	suite.Suite
 	source    Source
-	httpProxy *projectcontour.HTTPProxy
+	httpProxy *projcontour_v1.HTTPProxy
 }
 
 func (suite *HTTPProxySuite) SetupTest() {
-	fakeDynamicClient, s := newDynamicKubernetesClient()
-	var err error
-
-	suite.source, err = NewContourHTTPProxySource(
-		fakeDynamicClient,
-		"default",
-		"",
-		"{{.Name}}",
-		false,
-		false,
-	)
-	suite.NoError(err, "should initialize httpproxy source")
+	ctx := context.Background()
+	_, contourClient, clients := fakeContourClients()
 
 	suite.httpProxy = (fakeHTTPProxy{
 		name:      "foo-httpproxy-with-targets",
 		namespace: "default",
 		host:      "example.com",
 	}).HTTPProxy()
-
-	// Convert to unstructured
-	unstructuredHTTPProxy, err := convertHTTPProxyToUnstructured(suite.httpProxy, s)
-	if err != nil {
-		suite.Error(err)
-	}
-
-	_, err = fakeDynamicClient.Resource(projectcontour.HTTPProxyGVR).Namespace(suite.httpProxy.Namespace).Create(context.Background(), unstructuredHTTPProxy, metav1.CreateOptions{})
+	_, err := contourClient.ProjectcontourV1().HTTPProxies(suite.httpProxy.Namespace).Create(ctx, suite.httpProxy, metav1.CreateOptions{})
 	suite.NoError(err, "should succeed")
+
+	suite.source, err = NewContourHTTPProxySource(clients, &Config{
+		Namespace:    "default",
+		FQDNTemplate: "{{.Name}}",
+	})
+	suite.NoError(err, "should initialize httpproxy source")
 }
 
 func (suite *HTTPProxySuite) TestResourceLabelIsSet() {
@@ -79,14 +63,6 @@ func (suite *HTTPProxySuite) TestResourceLabelIsSet() {
 	for _, ep := range endpoints {
 		suite.Equal("httpproxy/default/foo-httpproxy-with-targets", ep.Labels[endpoint.ResourceLabelKey], "should set correct resource label")
 	}
-}
-
-func convertHTTPProxyToUnstructured(hp *projectcontour.HTTPProxy, s *runtime.Scheme) (*unstructured.Unstructured, error) {
-	unstructuredHTTPProxy := &unstructured.Unstructured{}
-	if err := s.Convert(hp, unstructuredHTTPProxy, context.Background()); err != nil {
-		return nil, err
-	}
-	return unstructuredHTTPProxy, nil
 }
 
 func TestHTTPProxy(t *testing.T) {
@@ -141,16 +117,12 @@ func TestNewContourHTTPProxySource(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			fakeDynamicClient, _ := newDynamicKubernetesClient()
-
-			_, err := NewContourHTTPProxySource(
-				fakeDynamicClient,
-				"",
-				ti.annotationFilter,
-				ti.fqdnTemplate,
-				ti.combineFQDNAndAnnotation,
-				false,
-			)
+			_, _, clients := fakeContourClients()
+			_, err := NewContourHTTPProxySource(clients, &Config{
+				AnnotationFilter:         ti.annotationFilter,
+				FQDNTemplate:             ti.fqdnTemplate,
+				CombineFQDNAndAnnotation: ti.combineFQDNAndAnnotation,
+			})
 			if ti.expectError {
 				assert.Error(t, err)
 			} else {
@@ -171,7 +143,9 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 		{
 			title: "one rule.host one lb.hostname",
 			httpProxy: fakeHTTPProxy{
-				host: "foo.bar", // Kubernetes requires removal of trailing dot
+				name:      "proxy",
+				namespace: "httpproxy-test",
+				host:      "foo.bar", // Kubernetes requires removal of trailing dot
 				loadBalancer: fakeLoadBalancerService{
 					hostnames: []string{"lb.com"}, // Kubernetes omits the trailing dot
 				},
@@ -186,7 +160,9 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 		{
 			title: "one rule.host one lb.IP",
 			httpProxy: fakeHTTPProxy{
-				host: "foo.bar",
+				name:      "proxy",
+				namespace: "httpproxy-test",
+				host:      "foo.bar",
 				loadBalancer: fakeLoadBalancerService{
 					ips: []string{"8.8.8.8"},
 				},
@@ -201,7 +177,9 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 		{
 			title: "one rule.host two lb.IP and two lb.Hostname",
 			httpProxy: fakeHTTPProxy{
-				host: "foo.bar",
+				name:      "proxy",
+				namespace: "httpproxy-test",
+				host:      "foo.bar",
 				loadBalancer: fakeLoadBalancerService{
 					ips:       []string{"8.8.8.8", "127.0.0.1"},
 					hostnames: []string{"elb.com", "alb.com"},
@@ -219,27 +197,37 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 			},
 		},
 		{
-			title:     "no rule.host",
-			httpProxy: fakeHTTPProxy{},
-			expected:  []*endpoint.Endpoint{},
-		},
-		{
-			title: "one rule.host invalid httpproxy",
+			title: "no rule.host",
 			httpProxy: fakeHTTPProxy{
-				host:    "foo.bar",
-				invalid: true,
+				name:      "proxy",
+				namespace: "httpproxy-test",
 			},
 			expected: []*endpoint.Endpoint{},
 		},
 		{
-			title:     "no targets",
-			httpProxy: fakeHTTPProxy{},
-			expected:  []*endpoint.Endpoint{},
+			title: "one rule.host invalid httpproxy",
+			httpProxy: fakeHTTPProxy{
+				name:      "proxy",
+				namespace: "httpproxy-test",
+				host:      "foo.bar",
+				invalid:   true,
+			},
+			expected: []*endpoint.Endpoint{},
+		},
+		{
+			title: "no targets",
+			httpProxy: fakeHTTPProxy{
+				name:      "proxy",
+				namespace: "httpproxy-test",
+			},
+			expected: []*endpoint.Endpoint{},
 		},
 		{
 			title: "delegate httpproxy",
 			httpProxy: fakeHTTPProxy{
-				delegate: true,
+				name:      "proxy",
+				namespace: "httpproxy-test",
+				delegate:  true,
 			},
 			expected: []*endpoint.Endpoint{},
 		},
@@ -247,13 +235,22 @@ func testEndpointsFromHTTPProxy(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			if source, err := newTestHTTPProxySource(); err != nil {
-				require.NoError(t, err)
-			} else if endpoints, err := source.endpointsFromHTTPProxy(ti.httpProxy.HTTPProxy()); err != nil {
-				require.NoError(t, err)
-			} else {
-				validateEndpoints(t, endpoints, ti.expected)
-			}
+			ctx := context.Background()
+			_, contourClient, clients := fakeContourClients()
+
+			hp := ti.httpProxy.HTTPProxy()
+			_, err := contourClient.ProjectcontourV1().HTTPProxies(hp.Namespace).Create(ctx, hp, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			src, err := NewContourHTTPProxySource(clients, &Config{
+				Namespace:    "default",
+				FQDNTemplate: "{{.Name}}",
+			})
+			require.NoError(t, err)
+
+			endpoints, err := src.Endpoints(ctx)
+			require.NoError(t, err)
+			validateEndpoints(t, endpoints, ti.expected)
 		})
 	}
 }
@@ -976,71 +973,33 @@ func testHTTPProxyEndpoints(t *testing.T) {
 		t.Run(ti.title, func(t *testing.T) {
 			t.Parallel()
 
-			httpProxies := make([]*projectcontour.HTTPProxy, 0)
+			ctx := context.Background()
+			_, contourClient, clients := fakeContourClients()
+
 			for _, item := range ti.httpProxyItems {
 				item.loadBalancer = ti.loadBalancer
-				httpProxies = append(httpProxies, item.HTTPProxy())
-			}
-
-			fakeDynamicClient, scheme := newDynamicKubernetesClient()
-			for _, httpProxy := range httpProxies {
-				converted, err := convertHTTPProxyToUnstructured(httpProxy, scheme)
-				require.NoError(t, err)
-				_, err = fakeDynamicClient.Resource(projectcontour.HTTPProxyGVR).Namespace(httpProxy.Namespace).Create(context.Background(), converted, metav1.CreateOptions{})
+				hp := item.HTTPProxy()
+				_, err := contourClient.ProjectcontourV1().HTTPProxies(hp.Namespace).Create(ctx, hp, metav1.CreateOptions{})
 				require.NoError(t, err)
 			}
 
-			httpProxySource, err := NewContourHTTPProxySource(
-				fakeDynamicClient,
-				ti.targetNamespace,
-				ti.annotationFilter,
-				ti.fqdnTemplate,
-				ti.combineFQDNAndAnnotation,
-				ti.ignoreHostnameAnnotation,
-			)
+			src, err := NewContourHTTPProxySource(clients, &Config{
+				Namespace:                ti.targetNamespace,
+				AnnotationFilter:         ti.annotationFilter,
+				FQDNTemplate:             ti.fqdnTemplate,
+				CombineFQDNAndAnnotation: ti.combineFQDNAndAnnotation,
+				IgnoreHostnameAnnotation: ti.ignoreHostnameAnnotation,
+			})
+			if ti.expectError {
+				require.Error(t, err)
+			}
 			require.NoError(t, err)
 
-			res, err := httpProxySource.Endpoints(context.Background())
-			if ti.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-
+			res, err := src.Endpoints(ctx)
+			assert.NoError(t, err)
 			validateEndpoints(t, res, ti.expected)
 		})
 	}
-}
-
-func newDynamicKubernetesClient() (*dynamicfake.FakeDynamicClient, *runtime.Scheme) {
-	s := runtime.NewScheme()
-	_ = contour.AddToScheme(s)
-	_ = projectcontour.AddToScheme(s)
-	return dynamicfake.NewSimpleDynamicClient(s), s
-}
-
-// httpproxy specific helper functions
-func newTestHTTPProxySource() (*httpProxySource, error) {
-	fakeDynamicClient, _ := newDynamicKubernetesClient()
-
-	src, err := NewContourHTTPProxySource(
-		fakeDynamicClient,
-		"default",
-		"",
-		"{{.Name}}",
-		false,
-		false,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	irsrc, ok := src.(*httpProxySource)
-	if !ok {
-		return nil, errors.New("underlying source type was not httpproxy")
-	}
-
-	return irsrc, nil
 }
 
 type fakeHTTPProxy struct {
@@ -1054,29 +1013,22 @@ type fakeHTTPProxy struct {
 	loadBalancer fakeLoadBalancerService
 }
 
-func (ir fakeHTTPProxy) HTTPProxy() *projectcontour.HTTPProxy {
-	var status string
+func (ir fakeHTTPProxy) HTTPProxy() *projcontour_v1.HTTPProxy {
+	status := "valid"
 	if ir.invalid {
 		status = "invalid"
-	} else {
-		status = "valid"
 	}
 
-	var spec projectcontour.HTTPProxySpec
-	if ir.delegate {
-		spec = projectcontour.HTTPProxySpec{}
-	} else {
-		spec = projectcontour.HTTPProxySpec{
-			VirtualHost: &projectcontour.VirtualHost{
-				Fqdn: ir.host,
-			},
+	var spec projcontour_v1.HTTPProxySpec
+	if !ir.delegate {
+		spec.VirtualHost = &projcontour_v1.VirtualHost{
+			Fqdn: ir.host,
 		}
 	}
 
 	lb := v1.LoadBalancerStatus{
 		Ingress: []v1.LoadBalancerIngress{},
 	}
-
 	for _, ip := range ir.loadBalancer.ips {
 		lb.Ingress = append(lb.Ingress, v1.LoadBalancerIngress{
 			IP: ip,
@@ -1088,18 +1040,16 @@ func (ir fakeHTTPProxy) HTTPProxy() *projectcontour.HTTPProxy {
 		})
 	}
 
-	httpProxy := &projectcontour.HTTPProxy{
+	return &projcontour_v1.HTTPProxy{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   ir.namespace,
 			Name:        ir.name,
 			Annotations: ir.annotations,
 		},
 		Spec: spec,
-		Status: projectcontour.Status{
+		Status: projcontour_v1.Status{
 			CurrentStatus: status,
 			LoadBalancer:  lb,
 		},
 	}
-
-	return httpProxy
 }
